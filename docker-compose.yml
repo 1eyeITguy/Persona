@@ -1,0 +1,35 @@
+# Persona — Docker Compose (End User / Production)
+#
+# This file is for RUNNING Persona from the published image.
+# It pulls from GitHub Container Registry — no source code needed.
+#
+# For development (building from source), use docker-compose.dev.yml
+#
+# Quick start:
+#   1. Copy .env.example to .env and set JWT_SECRET
+#   2. docker compose up -d
+#   3. Open http://localhost:8000
+#   4. Complete the Setup Wizard
+
+services:
+  persona:
+    image: ghcr.io/OWNER/persona:latest   # Replace OWNER with the GitHub username/org
+    container_name: persona
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      # Persists config.json (LDAP settings, local admin account) across restarts
+      - ./data:/app/data
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# The data/ directory must exist on the host before starting.
+# Create it with: mkdir -p data
+# Recommended permissions: chmod 700 data

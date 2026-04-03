@@ -1,0 +1,49 @@
+# ============================================================
+# Persona — .gitignore
+# If it contains secrets or runtime state — it stays off git.
+# ============================================================
+
+# --- Environment & Secrets (NEVER commit these) ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- Persona Runtime Data ---
+# config.json is created by the Setup Wizard and contains
+# the service account password. It must never be committed.
+data/config.json
+data/*.json
+data/*.db
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dist/
+frontend/build/
+*.log
+npm-debug.log*
+
+# --- IDE ---
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+._*

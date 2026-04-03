@@ -1,0 +1,3 @@
+# This file keeps the data/ directory tracked in git.
+# data/config.json is gitignored — it is created by the Setup Wizard at first run.
+# Do not add any other files to this directory manually.

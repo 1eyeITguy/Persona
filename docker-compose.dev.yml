@@ -1,0 +1,39 @@
+# Persona — Docker Compose (Development / Build from Source)
+#
+# Builds both services from local source with hot-reload.
+#
+# Quick start:
+#   1. Copy .env.example to .env and set JWT_SECRET
+#   2. docker compose -f docker-compose.dev.yml up
+#   3. Open http://localhost:5173
+
+services:
+  backend:
+    build: ./backend
+    container_name: persona-backend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/app/data
+    volumes:
+      # Persist config.json across restarts
+      - ./data:/app/data
+      # Mount source for hot-reload (uvicorn --reload reads from /app)
+      - ./backend:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build: ./frontend
+    container_name: persona-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+      # Exclude node_modules from the host mount so the container's version is used
+      - /app/node_modules
+    depends_on:
+      - backend
