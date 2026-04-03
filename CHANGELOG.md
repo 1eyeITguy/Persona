@@ -6,12 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Root `Dockerfile` (multi-stage) added for GitHub Actions workflow.
+  Stage 1: `node:20-alpine` builds the React app (`npm run build` → `dist/`).
+  Stage 2: `python:3.11-slim` installs backend deps, copies backend source and
+  the built `dist/` into `./static/`.
+- `backend/main.py` — mounts `static/assets` as `StaticFiles` and adds a
+  SPA catch-all (`/{full_path:path}` → `index.html`) when `./static/` exists.
+  Block is skipped in local dev (no `static/` dir — Vite handles the frontend).
+
+---
+
 ## [0.2.0] — 2026-04-03
 
 **Phase 1 — Setup Wizard, AD Login, Directory Tree, Settings**
 
-### Added
-- `backend/requirements.txt` — Python dependencies: fastapi, uvicorn[standard],
+### Added- `backend/requirements.txt` — Python dependencies: fastapi, uvicorn[standard],
   ldap3, python-jose[cryptography], passlib[bcrypt], python-dotenv,
   pydantic-settings, python-multipart
 - `backend/config.py` — Pydantic `BaseSettings` reading bootstrap values from
