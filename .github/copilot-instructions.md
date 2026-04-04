@@ -1,219 +1,335 @@
 # Persona — Copilot Instructions
-
-> This file is automatically loaded by GitHub Copilot in every session.
-> It is the single source of truth for project context, stack decisions, and rules.
-> Do not delete or rename this file.
+> v2.0 Full Platform Vision | April 2026
+> Auto-loaded every Copilot session. Do not delete or rename.
 
 ---
 
 ## What Is Persona?
 
-Persona is an open-source, browser-based help desk management tool for organizations
-running hybrid Microsoft identity environments (on-prem Active Directory + Entra ID).
+Persona is an open-source, self-hosted **identity operations platform** for
+organizations running Microsoft identity environments. Built for help desk
+technicians, IT administrators, and MSPs who need to stop jumping between
+ADUC, the Azure Portal, Exchange Admin Center, Intune, and vendor portals.
 
-It is designed to be **generic and community-friendly** — no company-specific values,
-domain names, or assumptions baked in. Any organization should be able to clone this
-repo, run `docker compose up`, complete the setup wizard, and be productive.
+It is a **platform** with four extensible layers:
+identity providers, service providers, integration plugins, and a workflow engine.
 
-**Core design principle:** Guide the tech toward the correct action. Make the wrong
-action hard. Safety over speed.
+**Core promise:** One tool. Every identity and device operation. Done correctly.
+With a full audit trail. Without needing to know which system owns which attribute.
 
 ---
 
-## Identity Environment Persona Supports
+## Current State — What Exists vs What Is Planned
 
-| Layer | Detail |
+Phase 1 is **complete and running**. Do NOT rewrite Phase 1 code unless
+explicitly asked to fix a specific bug.
+
+```
+Phase 1  COMPLETE   Setup wizard, local admin, AD login, LDAP tree, user panel
+Phase 2  NEXT       Entra connect, cloud view, TAP, groups read, SQLite DB
+Phase 3  PLANNED    Exchange view, SOA resolution, mailbox details
+Phase 4  PLANNED    Write operations with guardrails, approval workflows
+Phase 5  PLANNED    Workflow engine, name change, onboarding, offboarding
+Phase 6  PLANNED    Rules engine, reporting engine, community library
+Phase 7  PLANNED    Device management, device offboarding, integration plugins
+Phase 8  PLANNED    Multi-tenant MSP, operator dashboard, tenant isolation
+Phase 9  PLANNED    AI assistant, MCP server
+```
+
+---
+
+## SECURITY RULES — ENFORCED IN EVERY FILE
+
+### 1. Secrets Never in Code
+```python
+# CORRECT
+class Settings(BaseSettings):
+    jwt_secret: str
+
+# WRONG
+JWT_SECRET = "some-value"
+```
+
+### 2. Secrets Never in docker-compose.yml
+```yaml
+# CORRECT
+services:
+  backend:
+    env_file: .env
+
+# WRONG
+services:
+  backend:
+    environment:
+      JWT_SECRET: "actual-secret"
+```
+
+### 3. Secrets Never in Dockerfile
+ENV and ARG bake into image layers visible via docker history. Never.
+
+### 4. LDAP Credentials — Memory Only
+Exist only during the bind operation. Never logged. Never in exceptions.
+Error messages never reveal whether username or password was wrong.
+
+### 5. Service Account Password
+Stored only in data/config.json on the Docker host.
+API responses always return "••••••••" — never the actual value.
+
+### 6. JWT — Minimal Payload
+sub, display_name, dn, role, tenant_id, exp only.
+Frontend: module variable only — NOT localStorage or sessionStorage.
+
+### 7. .env.example
+Placeholder values only. Never real-looking values.
+
+---
+
+## IDENTITY ARCHITECTURE
+
+### Three Supported Worlds
+```
+AD Only          → LDAP bind auth, LDAP directory, no cloud
+Hybrid           → LDAP bind auth, AD + Entra data, Exchange SOA aware
+Entra Only       → MSAL auth, Graph API directory, Exchange Online
+```
+Configured in Setup Wizard. Persona adapts all behavior to the declared world.
+
+### Exchange SOA Resolution (per-user, not per-org)
+```
+Resolution layers (highest to lowest priority):
+  1. IsExchangeCloudManaged (Graph API, per-mailbox)
+  2. BlockExchangeProvisioningFromOnPremEnabled (org config)
+  3. msExchRecipientTypeDetails (LDAP attribute)
+
+Results:
+  CLOUD          → write via Graph API only
+  ON_PREM        → write via LDAP/EWS only
+  STALE_AD_ATTRS → AD has Exchange data BUT IT IS WRONG
+                   frozen at migration time, do not display
+                   show warning: connect Entra to see real data
+  UNKNOWN        → Entra not connected, cannot determine
+  NONE           → no mailbox
+```
+
+STALE_AD_ATTRS is the dangerous case. Never display stale AD Exchange
+attributes as current data. Always surface the warning state.
+
+### Service Identity Model
+```
+AD Service Account
+  → LDAP bind for all directory operations
+  → Credentials in data/config.json, never in .env
+
+Entra Service Principal
+  → Graph API for all Entra/Exchange Online operations
+  → Application permissions (not delegated user permissions)
+  → Client secret encrypted in data/config.json
+  → Expiry tracked, warning at 30 days
+
+Audit trail:
+  External (Entra/AD logs): Persona service identity is the actor
+  Internal (Persona audit): which tech triggered the action
+```
+
+---
+
+## MULTI-TENANCY — tenant_id ON EVERYTHING
+
+Every DB record, API call, audit entry, config file is tenant-scoped.
+
+```python
+# Every model
+class AnyModel(Base):
+    tenant_id: UUID  # always present, always in queries
+
+# Every query
+db.query(Model).filter(
+    Model.tenant_id == tenant_id,  # never omit this
+    ...
+)
+```
+
+```
+Deployment modes:
+  single      → one tenant, switcher hidden
+  enterprise  → multiple domains/subsidiaries
+  msp         → many client tenants, operator dashboard
+
+File structure:
+  data/
+  ├── platform.db          ← SQLite: tenants, Persona users, roles
+  └── tenants/
+        └── {tenant_id}/
+              ├── config.json   ← LDAP, Entra, Exchange, plugin creds
+              ├── rules/
+              ├── workflows/
+              └── audit.db      ← isolated per tenant
+```
+
+API routes: /api/v1/t/{tenant_slug}/... for all tenant-scoped operations
+
+---
+
+## DATABASE
+
+Phase 1: data/config.json (keep working, do not break)
+Phase 2+: SQLite + Alembic migrations
+
+Rules:
+- Every schema change has an Alembic migration file
+- App checks and applies migrations on startup
+- Never modify schema without a migration
+- tenant_id on every table that holds tenant data
+- SQLite for self-hosted, PostgreSQL path for future hosted
+
+---
+
+## PLUGIN FRAMEWORK (Phase 7+)
+
+```python
+class PersonaPlugin:
+    plugin_id: str
+    display_name: str
+    plugin_type: str  # "security"|"remote-access"|"mdm"|"networking"
+
+class DevicePlugin(PersonaPlugin):
+    def find_device(self, identifier: DeviceIdentifier) -> Device | None
+    def offboard_device(self, device: Device) -> ActionResult
+    def onboard_device(self, device: Device) -> ActionResult
+
+class UserPlugin(PersonaPlugin):
+    def find_user(self, identifier: UserIdentifier) -> PluginUser | None
+    def offboard_user(self, user: PluginUser) -> ActionResult
+```
+
+Plugin credentials: stored per-tenant in data/tenants/{id}/config.json
+
+---
+
+## WORKFLOW ENGINE (Phase 5+)
+
+YAML-defined. Preview-first. Rollback-capable. Audit-native.
+
+```yaml
+name: string
+version: semver
+target: user | device
+inputs: [...]
+steps:
+  - id: string
+    type: ad_write|graph_api|exchange_write|plugin|notification
+    condition: "{{ jinja2 }}"
+    required: bool
+    on_failure: stop|warn|skip
+    rollback:
+      restore_previous_values: true
+```
+
+---
+
+## TECH STACK
+
+| Layer | Choice |
 |---|---|
-| On-prem AD | Traditional Active Directory. Authoritative for all on-prem attributes. |
-| Entra ID | Synced from AD via Entra Connect (Azure AD Connect). |
-| Exchange | Cloud-only. Exchange attribute SOA = cloud. |
-| Key flag | `BlockExchangeProvisioningFromOnPremEnabled = True` |
-
-**Rules that must never be violated:**
-- NEVER write Exchange attributes from on-prem. Exchange SOA is cloud-only.
-- NEVER modify attributes that Entra Connect owns from the cloud side.
-- Respect the sync boundary — on-prem AD owns on-prem attributes.
-- LDAP credentials are used only for the bind operation. Never stored. Never logged.
-
----
-
-## Configuration Philosophy — No Hardcoded Values
-
-Persona uses a **two-layer configuration model:**
-
-### Layer 1 — Bootstrap `.env`
-Minimal. Only values the app needs to start before any database or config exists.
-
-```
-JWT_SECRET=...
-APP_PORT=8000
-FRONTEND_PORT=5173
-```
-
-That's it. No LDAP values. No domain names. No company data.
-
-### Layer 2 — In-App Settings (persisted in `data/config.json`)
-
-All LDAP/AD connection settings are configured through the **Settings UI** inside
-the app. They are stored in `data/config.json`, which is mounted as a Docker volume.
-
-**Why this approach:**
-- Any admin can set up the app without editing files on the server.
-- Makes Persona portable and community-distributable.
-- Settings survive container restarts.
-- No sensitive values need to be taught to the end user during deployment docs.
-
-The settings stored in `data/config.json`:
-```json
-{
-  "ldap": {
-    "host": "",
-    "port": 389,
-    "use_ssl": false,
-    "base_dn": "",
-    "service_account_dn": "",
-    "service_account_password": ""
-  },
-  "app": {
-    "site_name": "Persona",
-    "setup_complete": false
-  }
-}
-```
-
-### First-Run Experience
-
-If `setup_complete` is `false` (or `data/config.json` does not exist), the app
-redirects ALL routes to a **Setup Wizard** — a multi-step form that walks the
-admin through:
-
-1. LDAP connection settings (host, port, SSL, base DN)
-2. Service account credentials
-3. Test connection button (live LDAP bind test before saving)
-4. Confirm and save → sets `setup_complete: true`
-
-After setup, the app behaves normally (login → AD tree → user panel).
+| Backend | Python 3.11 + FastAPI (existing) |
+| Database | SQLite + Alembic (Phase 2) |
+| AD | ldap3, always in thread pool |
+| Entra/EXO | msal + Graph API (Phase 2+) |
+| Frontend | React 18 + Tailwind CSS (existing) |
+| Plugins | Python packages (Phase 7+) |
+| AI | Anthropic API claude-sonnet (Phase 9) |
+| MCP | Python MCP SDK (Phase 9) |
+| Registry | ghcr.io/1eyeITguy/persona |
 
 ---
 
-## Tech Stack — Final Decisions
+## BRANCHING STRATEGY
 
-| Layer | Choice | Notes |
-|---|---|---|
-| Backend | Python 3.11 + FastAPI | Async, OpenAPI docs at /api/docs |
-| AD queries | ldap3 | Best enterprise AD library. Always run in thread pool. |
-| Entra / EXO auth | msal (Microsoft's Python library) | Phase 2+ |
-| Config persistence | JSON file (`data/config.json`) | Mounted Docker volume |
-| Frontend | React 18 + Tailwind CSS + Vite | Dark theme |
-| Container | Docker + Docker Compose | python:3.11-slim base |
-| Orchestration | Portainer-compatible | Single docker-compose.yml |
-| Repo | GitHub | Public, community project |
+```
+feature/* → develop → main → tag v*.*.*
+               ↓          ↓        ↓
+             :dev      :latest  :v0.2.0
+```
+
+develop = default branch. Never commit directly to main.
 
 ---
 
-## Project Structure
+## PROJECT STRUCTURE
 
 ```
 persona/
 ├── .github/
-│   └── copilot-instructions.md   ← YOU ARE HERE
+│   ├── copilot-instructions.md
+│   └── workflows/
+│       ├── docker-dev.yml        ← develop → :dev
+│       └── docker-publish.yml   ← main+tags → :latest+:v*
 ├── backend/
-│   ├── main.py                   ← FastAPI app entry point
-│   ├── config.py                 ← Bootstrap settings (.env only)
-│   ├── app_config.py             ← data/config.json reader/writer
+│   ├── main.py
+│   ├── config.py                 ← .env bootstrap only
+│   ├── app_config.py             ← config.json
+│   ├── database/
+│   │   ├── base.py
+│   │   ├── migrations/
+│   │   └── models/
 │   ├── auth/
-│   │   ├── ldap.py               ← LDAP bind + AD query logic
-│   │   └── msal.py               ← Entra OAuth (Phase 2)
-│   ├── routes/
-│   │   ├── auth.py               ← Login, /me
-│   │   ├── ad.py                 ← AD tree + user endpoints
-│   │   ├── settings.py           ← Settings read/write + connection test
-│   │   └── entra.py              ← Entra endpoints (Phase 2)
-│   ├── models/
-│   │   └── schemas.py            ← All Pydantic models
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── ADTree.jsx
-│   │   │   ├── UserPanel.jsx
-│   │   │   ├── LoginForm.jsx
-│   │   │   ├── SetupWizard.jsx   ← First-run LDAP config wizard
-│   │   │   ├── SettingsPage.jsx  ← In-app settings UI
-│   │   │   └── ConnectEntra.jsx  ← Phase 2 stub
-│   │   ├── hooks/
-│   │   │   ├── useADTree.js
-│   │   │   └── useAppConfig.js   ← Reads app config / setup state
-│   │   ├── context/
-│   │   │   └── AuthContext.jsx
-│   │   ├── App.jsx
-│   │   └── main.jsx
-│   ├── index.html
-│   ├── package.json
-│   └── vite.config.js
-├── data/                         ← Docker volume mount point
-│   └── .gitkeep                  ← Keeps folder in git, config.json excluded
+│   │   ├── ldap.py
+│   │   └── msal.py
+│   ├── providers/
+│   │   ├── identity/
+│   │   └── exchange/
+│   ├── plugins/
+│   ├── workflows/
+│   ├── rules/
+│   └── routes/
+│       ├── auth.py
+│       ├── ad.py
+│       ├── entra.py
+│       ├── exchange.py
+│       ├── devices.py
+│       ├── workflows.py
+│       ├── rules.py
+│       ├── reports.py
+│       ├── settings.py
+│       └── operator.py
+├── frontend/src/
+├── data/.gitkeep
 ├── docs/
+│   ├── VISION.md
 │   ├── ARCHITECTURE.md
 │   ├── ROADMAP.md
-│   ├── COPILOT_PROMPTS_PHASE1.md
+│   ├── PLATFORM.md
+│   ├── FUTURE-HOSTING.md
 │   └── specs/
-│       ├── phase-01-ad-auth-tree.md
-│       └── settings-config.md
+│       ├── architecture/
+│       └── phase-*.md
 ├── docker-compose.yml
-├── .env.example                  ← Bootstrap only — no LDAP values
-├── .gitignore
-├── CHANGELOG.md
-├── COPILOT_CONTEXT.md
-└── README.md
+├── docker-compose.dev.yml
+└── Dockerfile
 ```
 
 ---
 
-## Coding Rules
+## CODING RULES
 
-1. **Read-only in Phase 1.** No write operations until Phase 2.
-2. **Never store credentials in .env.** LDAP values live in `data/config.json` only.
-3. **Never log credentials.** Service account password must never appear in logs.
-4. **LDAP runs in a thread pool.** Use `run_in_threadpool` for all ldap3 calls.
-5. **Pydantic models for everything.** All API shapes are typed.
-6. **Environment config only from .env.** Bootstrap values only — JWT secret, ports.
-7. **Generic by default.** No company names, no domain examples except placeholder text.
-8. **One feature at a time.** Do not scaffold Phase 2+ until Phase 1 is complete.
-9. **Changelog on every change.** Every meaningful change gets a `CHANGELOG.md` entry.
-10. **Document as you build.** Update `docs/` when architecture decisions are made.
-
----
-
-## Community / Open Source Rules
-
-- No company-specific values anywhere in code, comments, or docs.
-- Use generic placeholders: `yourdomain.com`, `DC=yourdomain,DC=com`,
-  `CN=persona-svc,OU=Service Accounts,DC=yourdomain,DC=com`
-- README must be written for a stranger who has never heard of this project.
-- All setup must be achievable through the UI — no file editing required after
-  the initial `docker compose up`.
+1. tenant_id on every DB model and query. Always.
+2. Read-only until Phase 4. No write operations before then.
+3. All LDAP calls in run_in_threadpool.
+4. Pydantic models for all API shapes.
+5. Alembic migration for every schema change.
+6. Secrets never in code, compose, or Dockerfile.
+7. Service account password always redacted in responses.
+8. One phase at a time. Validate before starting next.
+9. CHANGELOG.md updated on every meaningful change.
+10. Generic — no org-specific values anywhere in code or docs.
 
 ---
 
-## Design / UI Rules
+## UI RULES
 
-- Dark theme only. Background `#0f1117`, surface `#1a1d27`, border `#2d3148`.
-- Primary brand color: `#6474e5` (indigo). Accent: `#7c3aed` (violet).
-- Status colors: success `#4ade80`, warning `#f59e0b`, danger `#f87171`.
-- Left sidebar navigation, right content area.
-- "Connect to Entra" button always visible in header — gradient indigo-violet.
-- Setup Wizard uses a centered card layout — not the full app shell.
-- Settings page lives under a gear icon in the sidebar, accessible when logged in.
-
----
-
-## Phase Status
-
-| Phase | Feature | Status |
-|---|---|---|
-| 1 | Setup wizard + AD login + OU tree + user attribute panel | 🔧 In progress |
-| 2 | Entra ID connect + user cloud view | ⏳ Planned |
-| 3 | Exchange Online mailbox view | ⏳ Planned |
-| 4 | Write operations (password reset, unlock) | ⏳ Planned |
-| 5 | HR role — photo lookup and change only | ⏳ Planned |
+Colors: BG #0f1117 | Surface #1a1d27 | Border #2d3148
+Brand: Primary #6474e5 | Accent #7c3aed
+Status: Success #4ade80 | Warning #f59e0b | Danger #f87171
+Layout: Left sidebar | Right content area
+Forms: Centered card (no shell) for Setup Wizard and Login
+Write ops: Always preview → confirm → execute → audit

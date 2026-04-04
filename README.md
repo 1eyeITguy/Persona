@@ -1,94 +1,78 @@
 # Persona
 
-An open-source, browser-based help desk management tool for hybrid Microsoft
-identity environments (on-prem Active Directory + Entra ID + Exchange Online).
+An open-source, self-hosted **identity operations platform** for hybrid Microsoft
+identity environments — Active Directory, Entra ID, Exchange Online, or any
+combination of the three.
 
-Built for Tier 1 and Tier 2 help desk technicians. One tool instead of three.
+Built for help desk technicians, IT administrators, and managed service providers
+who need to stop jumping between tools to do simple work.
 
 > **Community project.** Contributions welcome.
-> See [ROADMAP](docs/ROADMAP.md) for what's planned.
+> See [ROADMAP](docs/ROADMAP.md) for what's planned and what's next.
 
 ---
 
 ## Quick Start
 
 You do not need to clone this repo to run Persona.
-Pull the published image and you're up in under 5 minutes.
-
-### 1. Create a folder and download the compose file
 
 ```bash
+# 1. Create a folder
 mkdir persona && cd persona
-curl -o docker-compose.yml https://raw.githubusercontent.com/OWNER/persona/main/docker-compose.yml
-```
 
-### 2. Create your `.env` file
+# 2. Get the compose file
+curl -o docker-compose.yml \
+  https://raw.githubusercontent.com/1eyeITguy/Persona/main/docker-compose.yml
 
-```bash
-curl -o .env.example https://raw.githubusercontent.com/OWNER/persona/main/.env.example
+# 3. Create your .env
+curl -o .env.example \
+  https://raw.githubusercontent.com/1eyeITguy/Persona/main/.env.example
 cp .env.example .env
-```
+# Edit .env — set JWT_SECRET using: openssl rand -hex 32
 
-Open `.env` and set `JWT_SECRET` to a random string:
+# 4. Create the data directory
+mkdir data && chmod 700 data
 
-```bash
-# Generate one automatically:
-openssl rand -hex 32
-```
-
-### 3. Create the data directory
-
-```bash
-mkdir data
-chmod 700 data
-```
-
-### 4. Start Persona
-
-```bash
+# 5. Start
 docker compose up -d
+
+# 6. Open http://localhost:8000
+# The Setup Wizard will guide you through the rest.
 ```
 
-### 5. Open the Setup Wizard
-
-Open **http://localhost:8000** in your browser.
-
-The Setup Wizard will walk you through:
-1. Creating a local admin account (your recovery account if AD is unreachable)
-2. Connecting to Active Directory
-
-After setup, your help desk team logs in with their Windows credentials.
-
----
-
-## Updating
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-Your configuration in `data/` is preserved across updates.
+No file editing beyond `.env`. Everything else is configured through the UI.
 
 ---
 
 ## What It Does
 
-### Phase 1 (Current)
-- First-run Setup Wizard — no file editing required after `.env`
-- Local admin account — break-glass access if AD is down
+### Phase 1 — Complete
+- First-run Setup Wizard (no file editing after .env)
+- Local admin account (break-glass if AD is unreachable)
 - Login with on-prem Active Directory credentials
-- Expandable AD directory tree (like ADUC in a browser)
+- Expandable AD directory tree — like ADUC in a browser
 - Click any user → full attribute panel
 - In-app Settings to update AD connection
 
-### Coming Soon
-- Entra ID connect + cloud user view
-- Exchange Online mailbox view
-- Password reset and account unlock (with confirmation guardrails)
-- HR role — user photo management only
+### Planned (see [ROADMAP](docs/ROADMAP.md))
+- Entra ID connect + cloud user view + TAP management
+- Exchange Online mailbox view with SOA-aware data
+- Write operations: password reset, unlock, group management
+- Workflow engine: name change, onboarding, offboarding
+- Rules engine: policy enforcement + attribute hygiene
+- Device management: offboarding across Intune, Autopilot, and vendor tools
+- Multi-tenant MSP support with operator dashboard
+- AI assistant + MCP server
 
-See [ROADMAP](docs/ROADMAP.md) for the full plan.
+---
+
+## Docker Image Tags
+
+| Tag | Description | Use |
+|---|---|---|
+| `:latest` | Current stable release | Production |
+| `:v0.2.0` | Pinned release | Stable, no surprises |
+| `:dev` | Current develop branch | Testing only — may be unstable |
 
 ---
 
@@ -98,6 +82,7 @@ See [ROADMAP](docs/ROADMAP.md) for the full plan.
 Browser → Persona Container → On-prem Active Directory (LDAP)
                            → Entra ID (OAuth — Phase 2)
                            → Exchange Online (Graph API — Phase 3)
+                           → Integration plugins (Phase 7)
 ```
 
 Persona runs entirely on your infrastructure. No data leaves your network
@@ -105,13 +90,47 @@ except for the Entra/Exchange connections you explicitly authorize.
 
 ---
 
-## Identity Environment
+## Identity Environment Support
 
-Persona is built for organizations with:
-- On-prem Active Directory synced to Entra ID via **Entra Connect**
-- Exchange **cloud-only** (`BlockExchangeProvisioningFromOnPremEnabled = True`)
+| Configuration | Supported |
+|---|---|
+| AD only (on-prem, no cloud) | ✓ Phase 1 |
+| AD + Entra hybrid (Entra Connect) | ✓ Phase 1 (AD) + Phase 2 (Entra) |
+| Entra only (cloud-native) | Phase 2 |
+| Exchange Online only | Phase 3 |
+| Exchange on-prem only | Phase 3 |
+| Exchange hybrid | Phase 3 |
 
-Persona respects the Exchange SOA — it never writes Exchange attributes from on-prem.
+Persona correctly handles Exchange SOA — it detects when AD Exchange attributes
+are stale (frozen at migration time) and never displays wrong data as current.
+
+---
+
+## Service Account Requirements
+
+Persona uses a service account — not individual user credentials.
+This means consistent permissions and a clean audit trail.
+
+Phase 1 (read-only):
+- Read access to User, OU, and Container objects
+- Read access to Group objects
+
+Phase 4+ (write operations):
+- Password reset rights on target OUs
+- Modify specific attributes (telephoneNumber, mobile, etc.)
+- Group membership modification (non-privileged groups)
+
+Never: Domain Admin. Never more than what the current phase requires.
+
+---
+
+## Deployment Modes
+
+Persona supports three deployment modes configured at first run:
+
+- **Single organization** — one tenant, one AD domain
+- **Enterprise** — multiple domains or subsidiaries  
+- **MSP** — many client tenants with operator dashboard and tech-to-tenant assignment
 
 ---
 
@@ -120,41 +139,39 @@ Persona respects the Exchange SOA — it never writes Exchange attributes from o
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.11 + FastAPI |
+| Database | SQLite + Alembic (Phase 2) |
 | AD Queries | ldap3 |
-| Auth | bcrypt (local admin), LDAP bind (AD users), MSAL (Entra — Phase 2) |
+| Entra/EXO | msal + Graph API (Phase 2+) |
 | Frontend | React 18 + Tailwind CSS |
-| Config | JSON file on Docker volume |
-| Image | `ghcr.io/OWNER/persona` |
-
----
-
-## Service Account Requirements
-
-Persona's AD service account needs **read-only** access:
-- Read access to User, OrganizationalUnit, and Container objects
-- Read access to Group objects (for group name resolution)
-- No write permissions required for Phase 1
+| Container | Docker + Docker Compose |
+| Registry | ghcr.io/1eyeITguy/persona |
 
 ---
 
 ## Documentation
 
-| Doc | Description |
+| Document | Description |
 |---|---|
-| [Architecture](docs/ARCHITECTURE.md) | System design and auth model |
-| [Roadmap](docs/ROADMAP.md) | Feature phases |
-| [Security](SECURITY.md) | Secrets model and vulnerability reporting |
+| [Vision](docs/VISION.md) | What Persona is and why it exists |
+| [Architecture](docs/ARCHITECTURE.md) | System design, auth model, API structure |
+| [Roadmap](docs/ROADMAP.md) | All phases with feature detail |
+| [Platform](docs/PLATFORM.md) | Plugin, workflow, and rules engine design |
+| [Future Hosting](docs/FUTURE-HOSTING.md) | Commercial path decisions |
+| [Security](SECURITY.md) | Secrets architecture, vulnerability reporting |
 | [Changelog](CHANGELOG.md) | Version history |
+
+Phase specs: [docs/specs/](docs/specs/)
+Architecture deep-dives: [docs/specs/architecture/](docs/specs/architecture/)
 
 ---
 
 ## Contributing
 
-1. Read `.github/copilot-instructions.md` for project context and coding rules
-2. Check the [ROADMAP](docs/ROADMAP.md) for planned phases
+1. Read `.github/copilot-instructions.md` — project context and all coding rules
+2. Check [ROADMAP](docs/ROADMAP.md) for what's planned next
 3. Open an issue before starting work on a new feature
-4. Update `CHANGELOG.md` with your changes
-5. All PRs target the `main` branch
+4. Target the `develop` branch — not `main`
+5. Update `CHANGELOG.md` with your changes
 
 ---
 

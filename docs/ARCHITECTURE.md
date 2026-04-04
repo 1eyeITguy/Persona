@@ -1,132 +1,296 @@
 # Architecture — Persona
 
+---
+
 ## System Overview
 
 ```
 [Browser]
-    │  HTTP
+    │
     ▼
 [Docker Container — Persona]
-    ├── React Frontend  (served by FastAPI in production, Vite in dev)
+    ├── React Frontend
     └── FastAPI Backend
-          ├── LDAP bind ──────────────→ [On-prem Active Directory]
-          ├── MSAL OAuth ─────────────→ [Entra ID / Graph API]  ← Phase 2+
-          └── data/config.json ───────→ [Docker Volume on host]
+          ├── Identity Providers
+          │     ├── AD (ldap3) ──────────────→ On-prem Domain Controller
+          │     ├── Entra ID (msal) ─────────→ Microsoft Graph API
+          │     └── Hybrid (both)
+          ├── Exchange Providers
+          │     ├── Online (Graph API) ──────→ Exchange Online
+          │     ├── On-Prem (EWS/LDAP) ─────→ Exchange Server
+          │     └── Hybrid (SOA-resolved)
+          ├── Integration Plugins
+          │     ├── Sophos, Umbrella, etc. → Vendor APIs
+          │     └── Community plugins
+          ├── Workflow Engine
+          ├── Rules Engine
+          └── data/ (Docker volume)
+                ├── platform.db      ← SQLite: platform-wide data
+                └── tenants/
+                      └── {id}/
+                            ├── config.json
+                            └── audit.db
 ```
-
-Persona runs entirely on your infrastructure. No data leaves your network
-except for the Entra/Exchange connections you explicitly authorize in Phase 2+.
 
 ---
 
 ## Authentication Model
 
-### Local Admin (Phase 1)
-- Created during Setup Wizard on first run
-- Password hashed with bcrypt (cost 12), stored in `data/config.json`
-- Used to configure AD before LDAP is available, and as break-glass recovery
-- JWT role: `local_admin`
+### Local Admin (Bootstrap)
+- Created in Setup Wizard before AD is connected
+- Password hashed with bcrypt cost 12
+- Stored in data/tenants/{id}/config.json
+- Break-glass account — always available even if AD is down
+- Rate-limited: 5 failures → 15-minute lockout
+- JWT role: local_admin
 
-### AD Users (Phase 1)
+### AD Users
 - Credentials submitted at login form
-- Backend performs LDAP bind using user's credentials to authenticate
-- Credentials exist in memory only for the bind — never stored, never logged
-- On success: JWT issued using service account for all subsequent queries
-- JWT role: `helpdesk`
+- Backend performs LDAP bind to authenticate
+- Credentials exist in memory only for bind duration
+- Never stored, never logged
+- Error messages never reveal which part of credential failed
+- On success: JWT issued, all subsequent queries use service account
+- JWT role: helpdesk_tier1 | helpdesk_tier2
 
-### Entra ID (Phase 2+)
-- Triggered by "Connect to Entra" button in the UI
-- MSAL OAuth2 authorization code flow
-- Scoped to read-only Graph API permissions
+### Entra OAuth (Phase 2+)
+- "Connect to Entra" button triggers MSAL auth code flow
+- Application permissions (not delegated)
 - Token stored server-side, never exposed to frontend
+- Scopes added per phase — never over-provisioned
 
 ---
 
-## Identity Boundary
+## Service Identity Model
 
-| Attribute type | Authoritative source | Persona writes? |
-|---|---|---|
-| AD attributes (sAMAccountName, DN, etc.) | On-prem AD | Phase 4+ with guardrails |
-| Exchange attributes (proxy addresses, etc.) | Exchange Online (cloud SOA) | Never |
-| Entra-only attributes (MFA state, etc.) | Entra ID | Phase 4+ via Graph API |
+Persona operates as itself — not as the logged-in tech.
 
-`BlockExchangeProvisioningFromOnPremEnabled = True` is respected at the
-application level. Persona never writes Exchange attributes via LDAP.
+```
+AD Service Account
+    Purpose: All LDAP operations
+    Auth:    Simple bind (DN + password)
+    Perms:   Read-only Phase 1-3, targeted writes Phase 4+
+    Stored:  data/tenants/{id}/config.json
+    Never:   .env, source code, API responses
 
----
+Entra Service Principal
+    Purpose: All Graph API operations
+    Auth:    Client credentials flow (client_id + secret)
+    Perms:   Application permissions, scoped per phase
+    Stored:  data/tenants/{id}/config.json (secret encrypted)
+    Expiry:  Tracked, warning at 30 days before expiry
+    Never:   Delegated user permissions
 
-## Configuration Model
-
-Two-layer, no secrets in source control:
-
-**Layer 1 — `.env`** (host filesystem, gitignored)
-Bootstrap only: JWT secret, port. Read by Docker Compose at startup.
-
-**Layer 2 — `data/config.json`** (host filesystem, gitignored, Docker volume)
-LDAP settings + local admin password hash. Written by Setup Wizard and Settings page.
-
----
-
-## Backend
-
-- Entry point: `backend/main.py`
-- Settings: `backend/config.py` (Pydantic BaseSettings, reads `.env`)
-- App config: `backend/app_config.py` (reads/writes `data/config.json`)
-- All LDAP calls in thread pool via `run_in_threadpool` — never block the event loop
-
-### API Prefix: `/api/v1/`
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/api/health` | None | Health check |
-| GET | `/api/v1/settings/status` | None | Setup state |
-| POST | `/api/v1/settings/bootstrap` | None (first run only) | Create local admin |
-| POST | `/api/v1/settings/test-connection` | None/JWT | Test LDAP bind |
-| POST | `/api/v1/settings/setup` | None (first run only) | Save LDAP config |
-| GET | `/api/v1/settings/ldap` | JWT | Get LDAP config (password redacted) |
-| PUT | `/api/v1/settings/ldap` | JWT | Update LDAP config |
-| POST | `/api/v1/auth/login` | None | Login (local or AD) |
-| GET | `/api/v1/auth/me` | JWT | Current user info |
-| GET | `/api/v1/ad/tree` | JWT | AD OU tree (one level) |
-| GET | `/api/v1/ad/ou/{dn}/children` | JWT | Children of an OU |
-| GET | `/api/v1/ad/user/{dn}` | JWT | User attributes |
+Audit model:
+    External log (Entra/AD): Persona service identity = actor
+    Internal log (Persona):  Tech identity = actor
+    Combined: who triggered it + what executed it
+```
 
 ---
 
-## Frontend
+## Identity Provider Abstraction
 
-- Build tool: Vite
-- Styling: Tailwind CSS with custom Persona color palette
-- Routing: React Router v6
-- State: React Context + hooks (no Redux in Phase 1)
-- Token storage: JS module variable — not localStorage or sessionStorage
+```
+IdentityProvider (abstract)
+    │
+    ├── ADIdentityProvider
+    │     └── Auth: LDAP bind
+    │     └── Directory: LDAP queries
+    │     └── Users: ldap3
+    │
+    ├── EntraIdentityProvider
+    │     └── Auth: MSAL device code / auth code
+    │     └── Directory: Graph API /users
+    │     └── Users: Graph SDK
+    │
+    └── HybridIdentityProvider
+          └── Auth: LDAP bind (AD authoritative for auth)
+          └── Directory: LDAP + Graph (merged view)
+          └── AD owns: on-prem attributes
+          └── Entra owns: cloud attributes
+```
 
-### Route Logic
+Configured in Setup Wizard. Persona behavior adapts automatically.
+
+---
+
+## Exchange SOA Resolution
+
+Exchange attribute authority is determined per-user using three layers.
+This runs on every user lookup where Exchange data is needed.
+
+```python
+class ExchangeSOA(str, Enum):
+    CLOUD          = "cloud"
+    ON_PREM        = "on_prem"
+    STALE_AD_ATTRS = "stale_ad_attrs"  # dangerous — never display
+    UNKNOWN        = "unknown"          # Entra not connected
+    NONE           = "none"             # no mailbox
+
+def resolve_exchange_soa(user, org_config, graph_data=None) -> ExchangeSOA:
+    # Layer 1: Per-mailbox declaration (highest trust)
+    if graph_data and graph_data.is_exchange_cloud_managed is True:
+        return ExchangeSOA.CLOUD
+    if graph_data and graph_data.is_exchange_cloud_managed is False:
+        return ExchangeSOA.ON_PREM
+
+    # Layer 2: Org-wide block
+    if org_config.block_exchange_provisioning_from_onprem:
+        # AD Exchange attrs present but cloud is SOA — they are stale
+        if user.has_legacy_exchange_attrs:
+            return ExchangeSOA.STALE_AD_ATTRS
+        # No AD Exchange attrs — clean cloud-only
+        if graph_data and graph_data.mailbox_exists:
+            return ExchangeSOA.CLOUD
+        if graph_data is None:
+            return ExchangeSOA.UNKNOWN
+        return ExchangeSOA.NONE
+
+    # Layer 3: Mailbox location from AD
+    if user.msexch_recipient_type == REMOTE_MAILBOX:
+        return ExchangeSOA.CLOUD
+    if user.msexch_recipient_type == ONPREM_MAILBOX:
+        return ExchangeSOA.ON_PREM
+
+    return ExchangeSOA.NONE
+```
+
+UI behavior per SOA result:
+- CLOUD: show Graph data, label "Exchange Online"
+- ON_PREM: show EWS/LDAP data, label "Exchange Server"
+- STALE_AD_ATTRS: suppress AD Exchange data, show warning + "Connect Entra"
+- UNKNOWN: show warning + "Connect Entra to see mailbox details"
+- NONE: show "No mailbox assigned"
+
+---
+
+## Multi-Tenancy
+
+tenant_id is on every database record. Every query filters by tenant_id.
+Missing this filter is a data breach. Copilot must include it on every query.
+
+```
+data/
+├── platform.db                 ← tenants, persona users, role assignments
+└── tenants/
+      └── {tenant_id}/
+            ├── config.json     ← LDAP, Entra, Exchange, plugin credentials
+            ├── rules/          ← YAML rule definitions
+            ├── workflows/      ← YAML workflow definitions
+            └── audit.db        ← immutable audit log, isolated per tenant
+
+API routes:
+    /api/v1/t/{tenant_slug}/ad/...
+    /api/v1/t/{tenant_slug}/entra/...
+    /api/v1/t/{tenant_slug}/devices/...
+    /api/v1/operator/...          ← MSP operator only
+```
+
+---
+
+## Database
+
+Phase 1: data/config.json (existing — keep working)
+Phase 2+: SQLite + Alembic
+
+```
+platform.db tables:
+    tenants           (id, slug, name, deployment_mode, created_at)
+    persona_users     (id, tenant_id, username, password_hash, role)
+    role_assignments  (id, user_id, tenant_id, role)
+
+tenants/{id}/audit.db tables:
+    audit_log         (id, tenant_id, tech_id, action, target_type,
+                       target_id, before_state, after_state, timestamp)
+```
+
+Migration rules:
+- Every schema change = one Alembic migration file
+- App runs migrations on startup automatically
+- Never modify schema without a migration
+- Config versioning: config.json has schema_version field
+
+---
+
+## API Structure
+
+```
+/api/health                              ← no auth
+/api/v1/settings/status                  ← no auth
+/api/v1/settings/bootstrap               ← no auth (first run only)
+/api/v1/settings/test-connection         ← no auth during setup
+/api/v1/settings/setup                   ← no auth (first run only)
+/api/v1/auth/login                       ← no auth
+/api/v1/auth/me                          ← JWT
+
+/api/v1/t/{slug}/settings/ldap           ← JWT + tenant scope
+/api/v1/t/{slug}/settings/entra          ← JWT + tenant scope
+/api/v1/t/{slug}/settings/integrations   ← JWT + tenant scope
+
+/api/v1/t/{slug}/ad/tree                 ← JWT
+/api/v1/t/{slug}/ad/user/{dn}            ← JWT
+/api/v1/t/{slug}/ad/group/{dn}           ← JWT (Phase 2)
+/api/v1/t/{slug}/ad/device/{dn}          ← JWT (Phase 7)
+
+/api/v1/t/{slug}/entra/user/{id}         ← JWT (Phase 2)
+/api/v1/t/{slug}/entra/groups            ← JWT (Phase 2)
+/api/v1/t/{slug}/entra/tap               ← JWT (Phase 2)
+
+/api/v1/t/{slug}/exchange/mailbox/{id}   ← JWT (Phase 3)
+
+/api/v1/t/{slug}/devices                 ← JWT (Phase 7)
+/api/v1/t/{slug}/devices/{id}/offboard   ← JWT (Phase 7)
+
+/api/v1/t/{slug}/workflows               ← JWT (Phase 5)
+/api/v1/t/{slug}/workflows/{id}/run      ← JWT (Phase 5)
+
+/api/v1/t/{slug}/rules                   ← JWT (Phase 6)
+/api/v1/t/{slug}/reports                 ← JWT (Phase 6)
+
+/api/v1/t/{slug}/audit                   ← JWT (Phase 4)
+
+/api/v1/operator/tenants                 ← Operator JWT (Phase 8)
+/api/v1/operator/users                   ← Operator JWT (Phase 8)
+/api/v1/operator/diagnostics             ← Operator JWT
+```
+
+---
+
+## Frontend Routing
 
 ```
 App loads
-    │
-    ├── GET /api/v1/settings/status
-    │       │
-    │       ├── local_admin_created=false → <SetupWizard /> (Step 1)
-    │       ├── ldap_configured=false     → <SetupWizard /> (Step 2)
-    │       └── both true + no token      → <LoginForm />
-    │
-    └── Token present → Main app shell → <ADTree /> + <UserPanel />
+    └── GET /api/v1/settings/status
+          ├── setup not complete → <SetupWizard />
+          └── setup complete
+                ├── no token → <LoginForm />
+                └── token valid → App Shell
+                      ├── /t/:slug/          → AD Tree + User Panel
+                      ├── /t/:slug/entra     → Entra View (Phase 2)
+                      ├── /t/:slug/exchange  → Exchange View (Phase 3)
+                      ├── /t/:slug/groups    → Group Management (Phase 2)
+                      ├── /t/:slug/devices   → Device Management (Phase 7)
+                      ├── /t/:slug/workflows → Workflow Library (Phase 5)
+                      ├── /t/:slug/rules     → Rules Dashboard (Phase 6)
+                      ├── /t/:slug/reports   → Reports (Phase 6)
+                      ├── /t/:slug/settings  → Settings
+                      └── /operator          → MSP Operator (Phase 8)
 ```
 
 ---
 
-## Deployment
+## Release & Branching
 
-### Development
-- `docker-compose.dev.yml` — builds from local source, hot reload on both backend and frontend
+```
+feature/* → develop → main → v*.*.*
+               ↓          ↓       ↓
+             :dev      :latest  :v0.2.0
 
-### Production (End Users)
-- `docker-compose.yml` — pulls published image from `ghcr.io`
-- GitHub Actions builds and publishes image on every push to `main` and on release tags
+:dev     unstable, tracks develop, for testing
+:latest  stable, tracks main, for production
+:v0.2.0  pinned release, never changes
+```
 
-### Versioning
-- `main` branch → `:latest` tag
-- Release tag `v0.2.0` → `:v0.2.0` and `:latest`
-- Multi-platform build: `linux/amd64` and `linux/arm64`
+Portainer stack for dev: pulls :dev, separate data/, different port
+Portainer stack for prod: pulls :latest, production data/
