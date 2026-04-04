@@ -6,6 +6,8 @@ Organised into logical groups:
   - Auth models       (LoginRequest, TokenResponse, UserInfo)
   - Settings routes   (SettingsStatusResponse, TestConnectionRequest,
                        TestConnectionResponse, SetupRequest)
+  - Entra models      (EntraConfigUpdate, EntraConfigResponse,
+                       TestEntraConnectionRequest, TestEntraConnectionResponse)
   - AD models         (ADNode, ADTreeResponse, ADUser)
 """
 
@@ -89,6 +91,8 @@ class SettingsStatusResponse(BaseModel):
     ldap_configured: bool
     setup_complete: bool
     site_name: str = "Persona"
+    entra_configured: bool = False
+    entra_secret_expires: Optional[str] = None
 
 
 class TestConnectionRequest(BaseModel):
@@ -109,10 +113,12 @@ class SetupRequest(BaseModel):
     """
     Sent by the Setup Wizard to save LDAP config and mark setup complete.
     After this request succeeds, POST /settings/setup returns 403.
+    entra is optional — users may skip Entra during wizard.
     """
 
     ldap: LDAPSettings
     site_name: str = "Persona"
+    entra: Optional["EntraConfigUpdate"] = None
 
 
 class LDAPSettingsUpdate(BaseModel):
@@ -140,6 +146,47 @@ class BootstrapRequest(BaseModel):
     username: str
     password: str
     confirm_password: str
+
+
+# ---------------------------------------------------------------------------
+# Entra models
+# ---------------------------------------------------------------------------
+
+
+class TestEntraConnectionRequest(BaseModel):
+    """Credentials to test against the Microsoft Graph API."""
+
+    tenant_id: str
+    client_id: str
+    client_secret: str
+
+
+class TestEntraConnectionResponse(BaseModel):
+    success: bool
+    message: str
+    user_count: Optional[int] = None
+
+
+class EntraConfigUpdate(BaseModel):
+    """
+    Used by the Setup Wizard (optional step) and PUT /entra/config.
+    client_secret is always required when saving — the backend never
+    returns it so the frontend cannot omit it on update.
+    """
+
+    tenant_id: str
+    client_id: str
+    client_secret: str
+    secret_expires: Optional[str] = None  # ISO date string, e.g. "2027-04-01"
+
+
+class EntraConfigResponse(BaseModel):
+    """Entra config safe for API responses — secret is always redacted."""
+
+    tenant_id: str
+    client_id: str
+    secret_expires: Optional[str] = None
+    connected: bool = True
 
 
 # ---------------------------------------------------------------------------

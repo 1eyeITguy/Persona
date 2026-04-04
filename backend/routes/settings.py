@@ -19,7 +19,9 @@ from passlib.context import CryptContext
 from starlette.concurrency import run_in_threadpool
 
 from backend.app_config import (
+    get_entra_settings,
     get_ldap_settings,
+    is_entra_configured,
     is_setup_complete,
     load_config,
     save_config,
@@ -28,12 +30,15 @@ from backend.auth.ldap import test_ldap_connection
 from backend.deps import optional_jwt, require_jwt
 from backend.models.schemas import (
     BootstrapRequest,
+    EntraConfigUpdate,
     LDAPSettings,
     LDAPSettingsUpdate,
     SetupRequest,
     SettingsStatusResponse,
     TestConnectionRequest,
     TestConnectionResponse,
+    TestEntraConnectionRequest,
+    TestEntraConnectionResponse,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -91,11 +96,14 @@ async def get_status() -> SettingsStatusResponse:
     local_admin_created = bool(config.get("local_admin_created", False))
     ldap_configured = bool(config.get("ldap_configured", False))
     site_name = config.get("app", {}).get("site_name", "Persona")
+    entra_cfg = get_entra_settings()
     return SettingsStatusResponse(
         local_admin_created=local_admin_created,
         ldap_configured=ldap_configured,
         setup_complete=local_admin_created and ldap_configured,
         site_name=site_name,
+        entra_configured=entra_cfg is not None,
+        entra_secret_expires=entra_cfg.get("secret_expires") if entra_cfg else None,
     )
 
 
@@ -160,7 +168,7 @@ async def test_connection(
 @router.post("/setup")
 async def setup(request: SetupRequest) -> dict:
     """
-    Save LDAP configuration and mark ldap_configured=true.
+    Save LDAP configuration (and optionally Entra) and mark ldap_configured=true.
 
     Only available when setup_complete=false.  Returns 403 if already done.
     """
@@ -181,8 +189,44 @@ async def setup(request: SetupRequest) -> dict:
         config["app"] = {}
     config["app"]["site_name"] = request.site_name
     config["app"]["setup_complete"] = True
+
+    if request.entra is not None:
+        config["entra"] = {
+            "tenant_id": request.entra.tenant_id,
+            "client_id": request.entra.client_id,
+            "client_secret": request.entra.client_secret,
+            "secret_expires": request.entra.secret_expires,
+            "connected": True,
+        }
+
     save_config(config)
     return {"success": True}
+
+
+@router.post("/test-entra-connection", response_model=TestEntraConnectionResponse)
+async def test_entra_connection_endpoint(
+    request: TestEntraConnectionRequest,
+    _token: object = Depends(optional_jwt),
+) -> TestEntraConnectionResponse:
+    """
+    Test Entra credentials against the Microsoft Graph API without saving.
+
+    Auth: public when setup is not complete (used by Setup Wizard before login
+    is possible); requires JWT when setup is complete (Settings page).
+    """
+    if is_setup_complete() and _token is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    from backend.auth.msal import test_entra_connection as _test  # noqa: PLC0415
+
+    result = await run_in_threadpool(
+        _test, request.tenant_id, request.client_id, request.client_secret
+    )
+    return TestEntraConnectionResponse(**result)
 
 
 @router.get("/ldap")

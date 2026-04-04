@@ -7,6 +7,36 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased — develop branch]
 
+### Phase 2 — Database Migration (Step 1)
+
+#### Added
+- SQLite database (`data/platform.db`) managed by SQLAlchemy 2 + Alembic
+- `backend/database/base.py` — `DeclarativeBase` and `TenantScopedMixin`
+- `backend/database/session.py` — `get_db()` FastAPI dependency
+- `backend/database/models/tenant.py` — `Tenant` model (id, slug, name, deployment_mode, status, created_at)
+- `backend/database/models/user.py` — `PersonaUser` model (tenant-scoped, bcrypt hash stored)
+- Alembic migration `0001_initial_schema` — creates `tenants` and `persona_users` tables
+- `backend/alembic.ini` — Alembic config with `%(here)s`-relative script location
+- Auto-migration on startup: `alembic upgrade head` runs before first request
+- One-time config.json → DB seed: Phase-1 installs carry forward with zero data loss
+
+### Phase 2 — Entra Service Principal Setup (Step 2)
+
+#### Added
+- `backend/auth/msal.py` — MSAL client credentials token + Graph API user count test
+- `backend/routes/entra.py` — `GET/PUT/DELETE /api/v1/entra/config` (JWT required)
+- `POST /api/v1/settings/test-entra-connection` — live credential test (public during setup, JWT after)
+- Entra config persisted to `data/config.json` under `entra` key (secret never returned in API)
+- Secret expiry date stored; surfaced in `/settings/status` for UI warning banners
+- `msal` added to `requirements.txt`
+
+#### Changed
+- Setup Wizard expanded from 4 to 5 steps — new optional Step 4 "Connect to Entra ID"
+- Confirm step (now Step 5) shows Entra summary or "Skipped" note
+- `POST /api/v1/settings/setup` accepts optional `entra` payload
+- `GET /api/v1/settings/status` returns `entra_configured` and `entra_secret_expires`
+- Settings page has new Entra ID section: connection status, expiry badge, edit form, disconnect
+
 ---
 
 ## [0.2.0] — Phase 1 Complete

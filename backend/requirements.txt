@@ -6,3 +6,6 @@ passlib[bcrypt]
 python-dotenv
 pydantic-settings
 python-multipart
+sqlalchemy
+alembic
+msal

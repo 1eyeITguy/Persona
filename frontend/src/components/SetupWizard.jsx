@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import axios from 'axios'
-import { Shield, CheckCircle, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { Shield, CheckCircle, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -434,10 +434,166 @@ function Step3({ ldapData, setLdapData, onNext }) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 4 — Confirm & Save
+// Step 4 — Connect to Entra ID (optional)
 // ---------------------------------------------------------------------------
 
-function Step4({ ldapData, onFinish }) {
+const DEFAULT_ENTRA = { tenant_id: '', client_id: '', client_secret: '', secret_expires: '' }
+
+function StepEntra({ onSave, onSkip }) {
+  const [form, setForm] = useState(DEFAULT_ENTRA)
+  const [loading, setLoading] = useState(false)
+  const [testResult, setTestResult] = useState(null)
+
+  function handleChange(field, value) {
+    setForm((p) => ({ ...p, [field]: value }))
+    setTestResult(null)
+  }
+
+  const canTest =
+    form.tenant_id.trim() && form.client_id.trim() && form.client_secret.trim()
+
+  async function handleTest() {
+    setTestResult(null)
+    setLoading(true)
+    try {
+      const res = await axios.post('/api/v1/settings/test-entra-connection', {
+        tenant_id: form.tenant_id,
+        client_id: form.client_id,
+        client_secret: form.client_secret,
+      })
+      setTestResult(res.data)
+    } catch (err) {
+      setTestResult({
+        success: false,
+        message: err.response?.data?.detail || 'Connection test failed.',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleSave() {
+    onSave({
+      tenant_id: form.tenant_id,
+      client_id: form.client_id,
+      client_secret: form.client_secret,
+      secret_expires: form.secret_expires || undefined,
+    })
+  }
+
+  return (
+    <>
+      <h1 className="text-xl font-semibold text-white mb-1">
+        Connect to Entra ID{' '}
+        <span className="text-base font-normal text-slate-500">(optional)</span>
+      </h1>
+      <p className="text-sm text-slate-400 mb-4">
+        You can skip this and connect later in Settings.
+      </p>
+
+      {/* Required permissions */}
+      <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 mb-5 text-xs text-slate-400 space-y-1">
+        <p className="font-medium text-slate-300 mb-1">Required API permissions:</p>
+        {['User.Read.All', 'Directory.Read.All', 'AuditLog.Read.All'].map((p) => (
+          <div key={p} className="flex items-center gap-2">
+            <CheckCircle className="h-3 w-3 text-success shrink-0" />
+            <span>{p}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <Label htmlFor="entra_tid">Entra Tenant ID</Label>
+          <Input
+            id="entra_tid"
+            value={form.tenant_id}
+            onChange={(e) => handleChange('tenant_id', e.target.value)}
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          />
+        </div>
+        <div>
+          <Label htmlFor="entra_cid">Client ID</Label>
+          <Input
+            id="entra_cid"
+            value={form.client_id}
+            onChange={(e) => handleChange('client_id', e.target.value)}
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          />
+        </div>
+        <div>
+          <Label htmlFor="entra_secret">Client Secret</Label>
+          <Input
+            id="entra_secret"
+            type="password"
+            value={form.client_secret}
+            onChange={(e) => handleChange('client_secret', e.target.value)}
+            placeholder="••••••••••••"
+            autoComplete="new-password"
+          />
+        </div>
+        <div>
+          <Label htmlFor="entra_exp">
+            Secret Expiry Date{' '}
+            <span className="text-slate-500 font-normal">(optional)</span>
+          </Label>
+          <Input
+            id="entra_exp"
+            type="date"
+            value={form.secret_expires}
+            onChange={(e) => handleChange('secret_expires', e.target.value)}
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Copy this from your App Registration in the Entra portal.
+          </p>
+        </div>
+
+        <a
+          href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs text-brand-primary hover:underline"
+        >
+          Open Entra Portal
+          <ExternalLink className="h-3 w-3" />
+        </a>
+
+        <Button onClick={handleTest} loading={loading} disabled={!canTest}>
+          Test Connection
+        </Button>
+
+        {testResult && (
+          <div
+            className={`rounded-md px-3 py-2 text-sm ${
+              testResult.success
+                ? 'bg-success/10 text-success'
+                : 'bg-danger/10 text-danger'
+            }`}
+          >
+            {testResult.message}
+          </div>
+        )}
+
+        <Button onClick={handleSave} disabled={!testResult?.success}>
+          Save and Continue →
+        </Button>
+
+        <button
+          onClick={onSkip}
+          className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors py-1"
+        >
+          Skip for now →
+        </button>
+      </div>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Step 5 — Confirm & Save
+// ---------------------------------------------------------------------------
+
+function Step5({ ldapData, entraCreds, onFinish }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -448,6 +604,7 @@ function Step4({ ldapData, onFinish }) {
       await axios.post('/api/v1/settings/setup', {
         ldap: ldapData,
         site_name: 'Persona',
+        ...(entraCreds && { entra: entraCreds }),
       })
       onFinish()
     } catch (err) {
@@ -462,16 +619,39 @@ function Step4({ ldapData, onFinish }) {
       <h1 className="text-xl font-semibold text-white mb-1">You're almost done!</h1>
       <p className="text-sm text-slate-400 mb-6">Review your settings before saving.</p>
 
-      <div className="rounded-md border border-border-subtle bg-app-bg p-4 text-sm space-y-2 mb-6">
+      <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+        Active Directory
+      </p>
+      <div className="rounded-md border border-border-subtle bg-app-bg p-4 text-sm space-y-2 mb-4">
         <Row label="Host" value={ldapData.host} />
         <Row label="Port" value={String(ldapData.port)} />
         <Row label="SSL" value={ldapData.use_ssl ? 'Enabled' : 'Disabled'} />
         <Row label="Base DN" value={ldapData.base_dn} />
-        <Row label="Service Account DN" value={ldapData.service_account_dn} />
+        <Row label="Service Account" value={ldapData.service_account_dn} />
         <Row label="Password" value="••••••••" />
       </div>
 
-      {error && <p className="mb-4 rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
+      <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+        Entra ID
+      </p>
+      <div className="rounded-md border border-border-subtle bg-app-bg p-4 text-sm space-y-2 mb-6">
+        {entraCreds ? (
+          <>
+            <Row label="Tenant ID" value={entraCreds.tenant_id} />
+            <Row label="Client ID" value={entraCreds.client_id} />
+            <Row label="Secret" value="••••••••" />
+            {entraCreds.secret_expires && (
+              <Row label="Expires" value={entraCreds.secret_expires} />
+            )}
+          </>
+        ) : (
+          <p className="text-slate-500 text-xs">Skipped — can be connected later in Settings.</p>
+        )}
+      </div>
+
+      {error && (
+        <p className="mb-4 rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
+      )}
 
       <Button onClick={handleSave} loading={loading}>
         Save &amp; Finish
@@ -505,6 +685,7 @@ const DEFAULT_LDAP = {
 export default function SetupWizard() {
   const [step, setStep] = useState(1)
   const [ldapData, setLdapData] = useState(DEFAULT_LDAP)
+  const [entraCreds, setEntraCreds] = useState(null)
 
   function handleFinish() {
     // Redirect to login — full page reload so App re-checks /settings/status
@@ -515,14 +696,22 @@ export default function SetupWizard() {
     <div className="flex min-h-screen items-center justify-center bg-app-bg px-4 py-12">
       <div className="w-full max-w-md">
         <Logo />
-        <StepIndicator current={step} total={4} />
+        <StepIndicator current={step} total={5} />
         <Card>
           {step === 1 && <Step1 onNext={() => setStep(2)} />}
           {step === 2 && <Step2 onNext={() => setStep(3)} />}
           {step === 3 && (
             <Step3 ldapData={ldapData} setLdapData={setLdapData} onNext={() => setStep(4)} />
           )}
-          {step === 4 && <Step4 ldapData={ldapData} onFinish={handleFinish} />}
+          {step === 4 && (
+            <StepEntra
+              onSave={(creds) => { setEntraCreds(creds); setStep(5) }}
+              onSkip={() => setStep(5)}
+            />
+          )}
+          {step === 5 && (
+            <Step5 ldapData={ldapData} entraCreds={entraCreds} onFinish={handleFinish} />
+          )}
         </Card>
       </div>
     </div>

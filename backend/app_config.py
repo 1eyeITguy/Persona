@@ -94,3 +94,20 @@ def get_local_admin():
     if not admin_data:
         return None
     return LocalAdmin(**admin_data)
+
+
+def get_entra_settings() -> dict | None:
+    """
+    Return the entra section from config.json as a dict, or None if Entra
+    has not been configured or is marked disconnected.
+    """
+    config = load_config()
+    entra = config.get("entra")
+    if not entra or not entra.get("connected", False):
+        return None
+    return entra
+
+
+def is_entra_configured() -> bool:
+    """True when Entra credentials have been saved and are marked connected."""
+    return get_entra_settings() is not None
