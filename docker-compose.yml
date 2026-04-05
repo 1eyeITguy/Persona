@@ -13,7 +13,7 @@
 
 services:
   persona:
-    image: ghcr.io/OWNER/persona:latest   # Replace OWNER with the GitHub username/org
+    image: ghcr.io/1eyeitguy/persona:latest
     container_name: persona
     restart: unless-stopped
     ports:
@@ -24,7 +24,7 @@ services:
     env_file:
       - .env
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
