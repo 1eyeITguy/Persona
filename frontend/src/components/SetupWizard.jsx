@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
-import { Shield, CheckCircle, Eye, EyeOff, Loader2, ExternalLink } from 'lucide-react'
+import { Shield, CheckCircle, Eye, EyeOff, Loader2, ExternalLink, ChevronRight } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -437,9 +437,18 @@ function Step3({ ldapData, setLdapData, onNext }) {
 // Step 4 — Connect to Entra ID (optional)
 // ---------------------------------------------------------------------------
 
+const REQUIRED_PERMISSIONS = [
+  'User.Read.All',
+  'Group.Read.All',
+  'Directory.Read.All',
+  'AuditLog.Read.All',
+]
+
+// ── Manual entry form (existing flow, unchanged) ──────────────────────────
+
 const DEFAULT_ENTRA = { tenant_id: '', client_id: '', client_secret: '', secret_expires: '' }
 
-function StepEntra({ onSave, onSkip }) {
+function ManualEntraForm({ onSave, onBack }) {
   const [form, setForm] = useState(DEFAULT_ENTRA)
   const [loading, setLoading] = useState(false)
   const [testResult, setTestResult] = useState(null)
@@ -482,109 +491,418 @@ function StepEntra({ onSave, onSkip }) {
   }
 
   return (
+    <div className="space-y-4">
+      <button
+        onClick={onBack}
+        className="text-xs text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
+      >
+        ← Back
+      </button>
+
+      <div>
+        <Label htmlFor="entra_tid">Entra Tenant ID</Label>
+        <Input
+          id="entra_tid"
+          value={form.tenant_id}
+          onChange={(e) => handleChange('tenant_id', e.target.value)}
+          placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        />
+      </div>
+      <div>
+        <Label htmlFor="entra_cid">Client ID</Label>
+        <Input
+          id="entra_cid"
+          value={form.client_id}
+          onChange={(e) => handleChange('client_id', e.target.value)}
+          placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        />
+      </div>
+      <div>
+        <Label htmlFor="entra_secret">Client Secret</Label>
+        <Input
+          id="entra_secret"
+          type="password"
+          value={form.client_secret}
+          onChange={(e) => handleChange('client_secret', e.target.value)}
+          placeholder="••••••••••••"
+          autoComplete="new-password"
+        />
+      </div>
+      <div>
+        <Label htmlFor="entra_exp">
+          Secret Expiry Date{' '}
+          <span className="text-slate-500 font-normal">(optional)</span>
+        </Label>
+        <Input
+          id="entra_exp"
+          type="date"
+          value={form.secret_expires}
+          onChange={(e) => handleChange('secret_expires', e.target.value)}
+        />
+        <p className="mt-1 text-xs text-slate-500">
+          Copy this from your App Registration in the Entra portal.
+        </p>
+      </div>
+
+      <a
+        href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 text-xs text-brand-primary hover:underline"
+      >
+        Open Entra Portal
+        <ExternalLink className="h-3 w-3" />
+      </a>
+
+      <Button onClick={handleTest} loading={loading} disabled={!canTest}>
+        Test Connection
+      </Button>
+
+      {testResult && (
+        <div
+          className={`rounded-md px-3 py-2 text-sm ${
+            testResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'
+          }`}
+        >
+          {testResult.message}
+        </div>
+      )}
+
+      <Button onClick={handleSave} disabled={!testResult?.success}>
+        Save and Continue →
+      </Button>
+    </div>
+  )
+}
+
+// ── Automatic setup via interactive sign-in ───────────────────────────────
+
+/**
+ * AutoEntraSetup handles the OAuth2 Authorization Code + PKCE flow.
+ *
+ * Phases:
+ *   bootstrap  – admin enters Tenant ID + Bootstrap Client ID, clicks "Sign in"
+ *   creating   – returned from OAuth, creating the App Registration
+ *   done       – success
+ *   error      – failed at any point
+ *
+ * When the component mounts, it checks sessionStorage for a pending
+ * session_token left by the /entra-callback page. If found, it skips
+ * straight to the "creating" phase.
+ */
+function AutoEntraSetup({ onSave, onBack, storedLdapData }) {
+  const [phase, setPhase] = useState('bootstrap')
+  const [tenantId, setTenantId] = useState('')
+  const [bootstrapClientId, setBootstrapClientId] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
+  const [createdClientId, setCreatedClientId] = useState(null)
+  const [secretExpires, setSecretExpires] = useState(null)
+
+  // On mount: check if we returned from the OAuth redirect
+  useEffect(() => {
+    const sessionToken = sessionStorage.getItem('entra_session_token')
+    if (sessionToken) {
+      setPhase('creating')
+      handleCreateApp(sessionToken)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleSignIn() {
+    if (!tenantId.trim() || !bootstrapClientId.trim()) return
+    setLoading(true)
+    setErrorMsg('')
+
+    // Persist LDAP data so it survives the page redirect
+    if (storedLdapData) {
+      sessionStorage.setItem('persona_ldap_data', JSON.stringify(storedLdapData))
+    }
+
+    try {
+      const redirectUri = `${window.location.origin}/entra-callback`
+      const res = await axios.post('/api/v1/entra/oauth2/start', {
+        tenant_id: tenantId.trim(),
+        client_id: bootstrapClientId.trim(),
+        redirect_uri: redirectUri,
+      })
+      // Redirect browser to Microsoft login
+      window.location.href = res.data.auth_url
+    } catch (err) {
+      setLoading(false)
+      setErrorMsg(err.response?.data?.detail || 'Failed to start sign-in. Please try again.')
+    }
+  }
+
+  async function handleCreateApp(sessionToken) {
+    setPhase('creating')
+    setErrorMsg('')
+    try {
+      const res = await axios.post('/api/v1/entra/oauth2/create-app', {
+        session_token: sessionToken,
+      })
+      sessionStorage.removeItem('entra_session_token')
+
+      if (res.data.success) {
+        setCreatedClientId(res.data.client_id)
+        setSecretExpires(res.data.secret_expires)
+        setPhase('done')
+      } else {
+        setErrorMsg(res.data.message || 'App Registration creation failed.')
+        setPhase('error')
+      }
+    } catch (err) {
+      sessionStorage.removeItem('entra_session_token')
+      setErrorMsg(err.response?.data?.detail || 'App Registration creation failed.')
+      setPhase('error')
+    }
+  }
+
+  function handleRetry() {
+    sessionStorage.removeItem('entra_session_token')
+    sessionStorage.removeItem('persona_ldap_data')
+    setPhase('bootstrap')
+    setErrorMsg('')
+    setLoading(false)
+  }
+
+  const redirectUri = `${window.location.origin}/entra-callback`
+
+  if (phase === 'bootstrap') {
+    return (
+      <div className="space-y-4">
+        <button
+          onClick={onBack}
+          className="text-xs text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
+        >
+          ← Back
+        </button>
+
+        <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 text-xs text-slate-400 space-y-2">
+          <p className="font-medium text-slate-300">Before you begin — one-time prerequisite:</p>
+          <p>
+            Create a simple <strong className="text-slate-300">public client</strong> App Registration
+            in your Azure Portal (no secret needed):
+          </p>
+          <ol className="list-decimal list-inside space-y-1 pl-1">
+            <li>Azure Portal → Entra ID → App Registrations → New Registration</li>
+            <li>Single tenant, any name (e.g. "Persona Bootstrap")</li>
+            <li>Add redirect URI (Web):{' '}
+              <code className="font-mono text-brand-primary break-all">{redirectUri}</code>
+            </li>
+            <li>Add delegated permissions: <em>Application.ReadWrite.All</em>, <em>AppRoleAssignment.ReadWrite.All</em></li>
+          </ol>
+          <p className="text-slate-500 text-xs">
+            This bootstrap app is only needed once. Persona creates and uses its own App Registration after this step.
+          </p>
+        </div>
+
+        <div>
+          <Label htmlFor="auto_tid">Entra Tenant ID</Label>
+          <Input
+            id="auto_tid"
+            value={tenantId}
+            onChange={(e) => setTenantId(e.target.value)}
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          />
+        </div>
+        <div>
+          <Label htmlFor="auto_bcid">Bootstrap App Client ID</Label>
+          <Input
+            id="auto_bcid"
+            value={bootstrapClientId}
+            onChange={(e) => setBootstrapClientId(e.target.value)}
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            The Client ID of the bootstrap App Registration you just created.
+          </p>
+        </div>
+
+        {errorMsg && (
+          <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{errorMsg}</p>
+        )}
+
+        <Button
+          onClick={handleSignIn}
+          loading={loading}
+          disabled={!tenantId.trim() || !bootstrapClientId.trim()}
+        >
+          Sign in with Microsoft →
+        </Button>
+      </div>
+    )
+  }
+
+  if (phase === 'creating') {
+    return (
+      <div className="flex flex-col items-center gap-4 py-6 text-center">
+        <Loader2 className="h-8 w-8 animate-spin text-brand-primary" />
+        <div>
+          <p className="text-sm font-medium text-slate-200">Creating App Registration...</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Setting up permissions and granting admin consent. This may take a moment.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (phase === 'done') {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-md border border-success/30 bg-success/10 px-4 py-4 text-sm space-y-2">
+          <p className="font-medium text-success flex items-center gap-2">
+            <CheckCircle className="h-4 w-4 shrink-0" />
+            App Registration created successfully
+          </p>
+          <p className="text-xs text-slate-400">
+            Persona has been registered in your Entra tenant with read-only Graph API permissions.
+          </p>
+          {createdClientId && (
+            <p className="text-xs text-slate-500 font-mono break-all">
+              Client ID: {createdClientId}
+            </p>
+          )}
+          {secretExpires && (
+            <p className="text-xs text-slate-500">Secret expires: {secretExpires}</p>
+          )}
+        </div>
+
+        <Button onClick={() => onSave(null)}>
+          Continue →
+        </Button>
+      </div>
+    )
+  }
+
+  // phase === 'error'
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md bg-danger/10 border border-danger/20 px-4 py-3">
+        <p className="text-sm font-medium text-danger mb-1">Setup failed</p>
+        <p className="text-xs text-slate-400">{errorMsg}</p>
+      </div>
+      <Button onClick={handleRetry} className="bg-slate-700 hover:bg-slate-600">
+        Try Again
+      </Button>
+    </div>
+  )
+}
+
+// ── StepEntra: mode selector ──────────────────────────────────────────────
+
+function StepEntra({ onSave, onSkip, initialMode, ldapData }) {
+  // mode: 'choose' | 'manual' | 'auto'
+  const [mode, setMode] = useState(initialMode || 'choose')
+
+  if (mode === 'auto') {
+    return (
+      <>
+        <h1 className="text-xl font-semibold text-white mb-1">
+          Connect to Entra ID{' '}
+          <span className="text-base font-normal text-slate-500">(optional)</span>
+        </h1>
+        <p className="text-sm text-slate-400 mb-5">
+          Sign in as a Global Administrator to let Persona create the App Registration automatically.
+        </p>
+        <AutoEntraSetup
+          onSave={onSave}
+          onBack={() => setMode('choose')}
+          storedLdapData={ldapData}
+        />
+        <button
+          onClick={onSkip}
+          className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors py-1 mt-3"
+        >
+          Skip for now →
+        </button>
+      </>
+    )
+  }
+
+  if (mode === 'manual') {
+    return (
+      <>
+        <h1 className="text-xl font-semibold text-white mb-1">
+          Connect to Entra ID{' '}
+          <span className="text-base font-normal text-slate-500">(optional)</span>
+        </h1>
+        <p className="text-sm text-slate-400 mb-4">
+          Enter your existing App Registration credentials.
+        </p>
+
+        <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 mb-5 text-xs text-slate-400 space-y-1">
+          <p className="font-medium text-slate-300 mb-1">Required API permissions:</p>
+          {REQUIRED_PERMISSIONS.map((p) => (
+            <div key={p} className="flex items-center gap-2">
+              <CheckCircle className="h-3 w-3 text-success shrink-0" />
+              <span>{p}</span>
+            </div>
+          ))}
+        </div>
+
+        <ManualEntraForm onSave={onSave} onBack={() => setMode('choose')} />
+        <button
+          onClick={onSkip}
+          className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors py-1 mt-3"
+        >
+          Skip for now →
+        </button>
+      </>
+    )
+  }
+
+  // mode === 'choose'
+  return (
     <>
       <h1 className="text-xl font-semibold text-white mb-1">
         Connect to Entra ID{' '}
         <span className="text-base font-normal text-slate-500">(optional)</span>
       </h1>
-      <p className="text-sm text-slate-400 mb-4">
-        You can skip this and connect later in Settings.
+      <p className="text-sm text-slate-400 mb-6">
+        Link Persona to Microsoft Entra ID to see cloud identity details alongside AD data.
       </p>
 
-      {/* Required permissions */}
-      <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 mb-5 text-xs text-slate-400 space-y-1">
-        <p className="font-medium text-slate-300 mb-1">Required API permissions:</p>
-        {['User.Read.All', 'Directory.Read.All', 'AuditLog.Read.All'].map((p) => (
-          <div key={p} className="flex items-center gap-2">
-            <CheckCircle className="h-3 w-3 text-success shrink-0" />
-            <span>{p}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="space-y-4">
-        <div>
-          <Label htmlFor="entra_tid">Entra Tenant ID</Label>
-          <Input
-            id="entra_tid"
-            value={form.tenant_id}
-            onChange={(e) => handleChange('tenant_id', e.target.value)}
-            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-          />
-        </div>
-        <div>
-          <Label htmlFor="entra_cid">Client ID</Label>
-          <Input
-            id="entra_cid"
-            value={form.client_id}
-            onChange={(e) => handleChange('client_id', e.target.value)}
-            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-          />
-        </div>
-        <div>
-          <Label htmlFor="entra_secret">Client Secret</Label>
-          <Input
-            id="entra_secret"
-            type="password"
-            value={form.client_secret}
-            onChange={(e) => handleChange('client_secret', e.target.value)}
-            placeholder="••••••••••••"
-            autoComplete="new-password"
-          />
-        </div>
-        <div>
-          <Label htmlFor="entra_exp">
-            Secret Expiry Date{' '}
-            <span className="text-slate-500 font-normal">(optional)</span>
-          </Label>
-          <Input
-            id="entra_exp"
-            type="date"
-            value={form.secret_expires}
-            onChange={(e) => handleChange('secret_expires', e.target.value)}
-          />
-          <p className="mt-1 text-xs text-slate-500">
-            Copy this from your App Registration in the Entra portal.
-          </p>
-        </div>
-
-        <a
-          href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-brand-primary hover:underline"
-        >
-          Open Entra Portal
-          <ExternalLink className="h-3 w-3" />
-        </a>
-
-        <Button onClick={handleTest} loading={loading} disabled={!canTest}>
-          Test Connection
-        </Button>
-
-        {testResult && (
-          <div
-            className={`rounded-md px-3 py-2 text-sm ${
-              testResult.success
-                ? 'bg-success/10 text-success'
-                : 'bg-danger/10 text-danger'
-            }`}
-          >
-            {testResult.message}
-          </div>
-        )}
-
-        <Button onClick={handleSave} disabled={!testResult?.success}>
-          Save and Continue →
-        </Button>
-
+      <div className="space-y-3 mb-4">
+        {/* Auto setup option */}
         <button
-          onClick={onSkip}
-          className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors py-1"
+          onClick={() => setMode('auto')}
+          className="w-full rounded-lg border-2 border-brand-primary/40 bg-brand-primary/10 hover:bg-brand-primary/20 hover:border-brand-primary/60 p-4 text-left transition-colors group"
         >
-          Skip for now →
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-white">Set up automatically</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Sign in as Global Admin — Persona creates the App Registration for you.
+              </p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-slate-300 shrink-0" />
+          </div>
+        </button>
+
+        {/* Manual entry option */}
+        <button
+          onClick={() => setMode('manual')}
+          className="w-full rounded-lg border border-border-subtle hover:border-slate-500 bg-transparent hover:bg-white/5 p-4 text-left transition-colors group"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-300">Enter credentials manually</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                I already have an App Registration with the required permissions.
+              </p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-slate-300 shrink-0" />
+          </div>
         </button>
       </div>
+
+      <button
+        onClick={onSkip}
+        className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors py-1"
+      >
+        Skip for now →
+      </button>
     </>
   )
 }
@@ -601,10 +919,14 @@ function Step5({ ldapData, entraCreds, onFinish }) {
     setError('')
     setLoading(true)
     try {
+      // entraCreds === null means auto-setup already persisted Entra credentials;
+      // don't include the entra key so the backend doesn't overwrite them.
+      // entraCreds === undefined/false means skipped.
+      // entraCreds is an object means manual entry.
       await axios.post('/api/v1/settings/setup', {
         ldap: ldapData,
         site_name: 'Persona',
-        ...(entraCreds && { entra: entraCreds }),
+        ...(entraCreds && entraCreds !== null && { entra: entraCreds }),
       })
       onFinish()
     } catch (err) {
@@ -635,7 +957,13 @@ function Step5({ ldapData, entraCreds, onFinish }) {
         Entra ID
       </p>
       <div className="rounded-md border border-border-subtle bg-app-bg p-4 text-sm space-y-2 mb-6">
-        {entraCreds ? (
+        {entraCreds === null ? (
+          /* entraCreds null means auto-setup already saved credentials */
+          <p className="text-slate-400 text-xs flex items-center gap-2">
+            <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />
+            Configured automatically — App Registration created in your tenant.
+          </p>
+        ) : entraCreds ? (
           <>
             <Row label="Tenant ID" value={entraCreds.tenant_id} />
             <Row label="Client ID" value={entraCreds.client_id} />
@@ -685,12 +1013,36 @@ const DEFAULT_LDAP = {
 export default function SetupWizard() {
   const [step, setStep] = useState(1)
   const [ldapData, setLdapData] = useState(DEFAULT_LDAP)
-  const [entraCreds, setEntraCreds] = useState(null)
+  const [entraCreds, setEntraCreds] = useState(undefined) // undefined = not yet decided
+
+  // On mount: detect return from OAuth redirect.
+  // Restore LDAP data that was stored before the redirect, and jump to step 4
+  // in auto mode so AutoEntraSetup can pick up the session_token from sessionStorage.
+  useEffect(() => {
+    const sessionToken = sessionStorage.getItem('entra_session_token')
+    if (sessionToken) {
+      const storedLdap = sessionStorage.getItem('persona_ldap_data')
+      if (storedLdap) {
+        try {
+          setLdapData(JSON.parse(storedLdap))
+        } catch {
+          // Ignore malformed data
+        }
+        sessionStorage.removeItem('persona_ldap_data')
+      }
+      setStep(4)
+    }
+  }, [])
 
   function handleFinish() {
     // Redirect to login — full page reload so App re-checks /settings/status
     window.location.href = '/login'
   }
+
+  // Check if we're returning from OAuth (session_token present)
+  const isReturningFromOAuth = Boolean(
+    typeof window !== 'undefined' && sessionStorage.getItem('entra_session_token')
+  )
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-app-bg px-4 py-12">
@@ -705,8 +1057,10 @@ export default function SetupWizard() {
           )}
           {step === 4 && (
             <StepEntra
+              initialMode={isReturningFromOAuth ? 'auto' : undefined}
+              ldapData={ldapData}
               onSave={(creds) => { setEntraCreds(creds); setStep(5) }}
-              onSkip={() => setStep(5)}
+              onSkip={() => { setEntraCreds(false); setStep(5) }}
             />
           )}
           {step === 5 && (

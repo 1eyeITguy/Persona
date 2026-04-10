@@ -1,6 +1,7 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, Outlet, NavLink } from 'react-router-dom'
-import { Settings, Shield, LogOut, Users, Monitor } from 'lucide-react'
+import { Settings, Shield, LogOut, Users, Monitor, Loader2 } from 'lucide-react'
+import axios from 'axios'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 import { useAppConfig } from './hooks/useAppConfig.js'
 import SetupWizard from './components/SetupWizard.jsx'
@@ -20,6 +21,80 @@ function FullScreenSpinner() {
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-app-bg">
       <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand-primary border-t-transparent" />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Entra OAuth2 callback page
+// Handles the redirect from Microsoft after the admin authenticates.
+// Exchanges the authorization code for a session token, stores it in
+// sessionStorage, then redirects back to the app root (/ → SetupWizard).
+// ---------------------------------------------------------------------------
+
+function EntraCallbackPage() {
+  const [status, setStatus] = useState('exchanging') // 'exchanging' | 'error'
+  const [errorMsg, setErrorMsg] = useState('')
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    const state = params.get('state')
+    const error = params.get('error')
+    const errorDescription = params.get('error_description')
+
+    if (error) {
+      setErrorMsg(errorDescription || error)
+      setStatus('error')
+      return
+    }
+
+    if (!code || !state) {
+      setErrorMsg('Missing authorization parameters in callback URL.')
+      setStatus('error')
+      return
+    }
+
+    axios.post('/api/v1/entra/oauth2/exchange', { code, state })
+      .then(res => {
+        if (res.data.success && res.data.session_token) {
+          sessionStorage.setItem('entra_session_token', res.data.session_token)
+          window.location.replace('/')
+        } else {
+          setErrorMsg(res.data.message || 'Token exchange failed.')
+          setStatus('error')
+        }
+      })
+      .catch(err => {
+        setErrorMsg(err.response?.data?.detail || 'Token exchange failed.')
+        setStatus('error')
+      })
+  }, [])
+
+  return (
+    <div className="flex h-screen w-screen items-center justify-center bg-app-bg px-4">
+      <div className="w-full max-w-sm rounded-xl border border-border-subtle bg-surface p-8 text-center shadow-2xl">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-primary mx-auto mb-4 shadow-lg">
+          <Shield className="h-7 w-7 text-white" />
+        </div>
+        {status === 'exchanging' ? (
+          <>
+            <Loader2 className="h-5 w-5 animate-spin text-brand-primary mx-auto mb-3" />
+            <p className="text-sm text-slate-400">Completing sign-in...</p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm font-medium text-danger mb-2">Sign-in failed</p>
+            <p className="text-xs text-slate-400 mb-4">{errorMsg}</p>
+            <button
+              onClick={() => window.location.replace('/')}
+              className="text-sm text-brand-primary hover:underline"
+            >
+              Return to setup
+            </button>
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -350,6 +425,11 @@ function SettingsPagePlaceholder() {
 function AppRoutes() {
   const { setupComplete, loading } = useAppConfig()
   const { user } = useAuth()
+
+  // Handle OAuth2 callback regardless of setup/auth state
+  if (window.location.pathname === '/entra-callback') {
+    return <EntraCallbackPage />
+  }
 
   if (loading) return <FullScreenSpinner />
   if (!setupComplete) return <SetupWizard />

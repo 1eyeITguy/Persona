@@ -192,6 +192,80 @@ class EntraConfigResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Entra OAuth2 / programmatic App Registration models
+# ---------------------------------------------------------------------------
+
+
+class OAuthStartRequest(BaseModel):
+    """Sent by the frontend to begin the OAuth2 Authorization Code + PKCE flow."""
+
+    tenant_id: str
+    client_id: str    # bootstrap public client app ID registered by the admin
+    redirect_uri: str  # e.g. "http://localhost:5173/entra-callback"
+
+
+class OAuthStartResponse(BaseModel):
+    """The Microsoft authorization URL to redirect the browser to."""
+
+    auth_url: str
+
+
+class OAuthExchangeRequest(BaseModel):
+    """Sent by the callback page after Microsoft redirects back with a code."""
+
+    code: str   # authorization code from the redirect query parameter
+    state: str  # CSRF/PKCE state value from the redirect query parameter
+
+
+class OAuthExchangeResponse(BaseModel):
+    success: bool
+    session_token: Optional[str] = None  # opaque ID; used by create-app endpoint
+    message: Optional[str] = None
+
+
+class CreateAppRequest(BaseModel):
+    """Sent by the frontend to trigger App Registration creation."""
+
+    session_token: str  # from OAuthExchangeResponse.session_token
+
+
+class CreateAppResponse(BaseModel):
+    success: bool
+    client_id: Optional[str] = None
+    secret_expires: Optional[str] = None  # ISO date YYYY-MM-DD
+    message: str
+    # NOTE: client_secret is NEVER in this response — it is saved server-side only
+
+
+# ---------------------------------------------------------------------------
+# Entra cloud user models (for Cloud tab in UserDetail)
+# ---------------------------------------------------------------------------
+
+
+class EntraGroupRef(BaseModel):
+    """A single Entra group membership entry."""
+
+    name: str
+    group_type: str  # "Security" | "M365" | "Dynamic" | "Distribution"
+
+
+class EntraUserResponse(BaseModel):
+    """
+    Cloud identity data for a single user.
+    Returned by GET /api/v1/entra/users/{upn}.
+    """
+
+    found: bool
+    entra_object_id: Optional[str] = None
+    account_enabled: Optional[bool] = None
+    last_sign_in: Optional[str] = None          # ISO datetime or None
+    sign_in_risk_level: Optional[str] = None    # "none"|"low"|"medium"|"high" — requires P2
+    mfa_methods: list[str] = Field(default_factory=list)
+    licenses: list[str] = Field(default_factory=list)
+    groups: list[EntraGroupRef] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # AD models
 # ---------------------------------------------------------------------------
 

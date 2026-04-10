@@ -108,6 +108,7 @@ const TABS = [
   { id: 'member-of',        label: 'Member Of' },
   { id: 'object',           label: 'Object' },
   { id: 'attribute-editor', label: 'Attribute Editor' },
+  { id: 'cloud',            label: 'Cloud' },
 ]
 
 // ---------------------------------------------------------------------------
@@ -409,6 +410,203 @@ function Skeleton() {
 }
 
 // ---------------------------------------------------------------------------
+// Tab: Cloud (Entra ID)
+// ---------------------------------------------------------------------------
+
+const GROUP_TYPE_STYLES = {
+  Security:     'bg-slate-500/20 text-slate-300 border-slate-500/30',
+  M365:         'bg-blue-500/20 text-blue-300 border-blue-500/30',
+  Dynamic:      'bg-purple-500/20 text-purple-300 border-purple-500/30',
+  Distribution: 'bg-slate-600/20 text-slate-400 border-slate-600/30',
+}
+
+function GroupTypeBadge({ type }) {
+  const cls = GROUP_TYPE_STYLES[type] ?? GROUP_TYPE_STYLES.Distribution
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
+      {type}
+    </span>
+  )
+}
+
+function CloudSection({ title, children }) {
+  return (
+    <div className="mb-5">
+      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">{title}</p>
+      {children}
+    </div>
+  )
+}
+
+function CloudField({ label, value, mono = false }) {
+  return (
+    <div className="grid grid-cols-[10rem_1fr] gap-x-4 border-b border-border-subtle/40 py-1.5 last:border-0">
+      <dt className="self-start pt-px text-xs text-slate-500">{label}</dt>
+      <dd className={`text-sm ${mono ? 'font-mono text-xs text-slate-300' : 'text-slate-200'}`}>
+        {value !== null && value !== undefined && value !== ''
+          ? value
+          : <span className="text-slate-600">—</span>}
+      </dd>
+    </div>
+  )
+}
+
+function CloudTab({ upn, getToken }) {
+  const [data, setData]     = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [errKind, setErrKind] = useState(null) // 'not_configured' | 'fetch_error' | null
+
+  useEffect(() => {
+    if (!upn) return
+    setData(null)
+    setErrKind(null)
+    setLoading(true)
+    const token = getToken()
+    axios
+      .get(`/api/v1/entra/users/${encodeURIComponent(upn)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      .then(res => setData(res.data))
+      .catch(err => {
+        if (err.response?.status === 503) {
+          setErrKind('not_configured')
+        } else {
+          setErrKind('fetch_error')
+        }
+      })
+      .finally(() => setLoading(false))
+  }, [upn]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!upn) {
+    return (
+      <p className="text-sm text-slate-500">No UPN set — cannot look up cloud identity.</p>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-slate-500">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading cloud identity...
+      </div>
+    )
+  }
+
+  if (errKind === 'not_configured') {
+    return (
+      <div className="rounded-md border border-border-subtle bg-app-bg/60 p-4">
+        <p className="text-sm text-slate-400">
+          Entra ID is not connected.{' '}
+          <a href="/settings" className="text-brand-primary hover:underline">
+            Go to Settings
+          </a>{' '}
+          to connect.
+        </p>
+      </div>
+    )
+  }
+
+  if (errKind === 'fetch_error') {
+    return (
+      <div className="flex items-center gap-2 text-sm text-danger">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        Failed to load cloud identity data.
+      </div>
+    )
+  }
+
+  if (data && !data.found) {
+    return (
+      <p className="text-sm text-slate-500">No cloud identity found for this user.</p>
+    )
+  }
+
+  if (!data) return null
+
+  const lastSignInDisplay = data.last_sign_in
+    ? formatDate(data.last_sign_in)
+    : null
+
+  return (
+    <dl>
+      <CloudSection title="Cloud Identity">
+        <CloudField label="Entra Object ID" value={data.entra_object_id} mono />
+        <CloudField
+          label="Account Status"
+          value={
+            data.account_enabled === null || data.account_enabled === undefined ? null : (
+              <span
+                className={
+                  data.account_enabled
+                    ? 'text-success'
+                    : 'text-danger'
+                }
+              >
+                {data.account_enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            )
+          }
+        />
+        <CloudField label="Last Sign-in" value={lastSignInDisplay} />
+        <CloudField label="Sign-in Risk" value={data.sign_in_risk_level} />
+      </CloudSection>
+
+      <CloudSection title="MFA">
+        {data.mfa_methods.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {data.mfa_methods.map(m => (
+              <span
+                key={m}
+                className="rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 text-xs text-success"
+              >
+                {m}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">No MFA methods registered</p>
+        )}
+      </CloudSection>
+
+      <CloudSection title="Licenses">
+        {data.licenses.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {data.licenses.map(l => (
+              <span
+                key={l}
+                className="rounded-full border border-brand-primary/30 bg-brand-primary/10 px-2.5 py-0.5 text-xs text-brand-primary"
+              >
+                {l}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">No licenses assigned</p>
+        )}
+      </CloudSection>
+
+      <CloudSection title={`Cloud Groups (${data.groups.length})`}>
+        {data.groups.length > 0 ? (
+          <ul className="space-y-1.5">
+            {data.groups.map(g => (
+              <li
+                key={g.name}
+                className="flex items-center justify-between gap-3 rounded-md border border-border-subtle/50 bg-app-bg/40 px-3 py-1.5"
+              >
+                <span className="text-sm text-slate-200 truncate">{g.name}</span>
+                <GroupTypeBadge type={g.group_type} />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-slate-500">No cloud group memberships</p>
+        )}
+      </CloudSection>
+    </dl>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // UserDetail — main export
 // ---------------------------------------------------------------------------
 
@@ -450,6 +648,7 @@ export default function UserDetail({ userDn, onClose, onUserSelect }) {
       case 'member-of':        return <MemberOfTab user={user} />
       case 'object':           return <ObjectTab user={user} />
       case 'attribute-editor': return <AttributeEditorTab rawAttributes={user.raw_attributes} />
+      case 'cloud':            return <CloudTab upn={user.upn} getToken={getToken} />
       default:                 return null
     }
   }

@@ -5,7 +5,28 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
-## [Unreleased — develop branch]
+## [Unreleased — dev branch]
+
+### Phase 2 — Entra Connect: Programmatic App Registration + Cloud Tab
+
+#### Added
+- `backend/auth/msal.py` — OAuth2 Authorization Code + PKCE helpers:
+  - `build_oauth_auth_url` — generates Microsoft authorization URL with PKCE state stored server-side
+  - `exchange_oauth_code` — exchanges auth code for delegated access token
+  - `consume_oauth_session` — retrieves and removes a session entry
+  - `create_app_registration` — creates App Registration + SP + admin consent grants + client secret via Graph API
+  - `get_entra_user` — fetches cloud identity (profile, MFA, licenses, groups) by UPN using client credentials
+- `backend/models/schemas.py` — new schemas: `OAuthStartRequest/Response`, `OAuthExchangeRequest/Response`, `CreateAppRequest/Response`, `EntraGroupRef`, `EntraUserResponse`
+- `backend/routes/entra.py` — four new endpoints:
+  - `POST /api/v1/entra/oauth2/start` — generate auth URL
+  - `POST /api/v1/entra/oauth2/exchange` — exchange auth code
+  - `POST /api/v1/entra/oauth2/create-app` — create App Registration and save credentials
+  - `GET /api/v1/entra/users/{upn}` — cloud identity data for Cloud tab
+- `frontend/src/App.jsx` — `EntraCallbackPage` component and `/entra-callback` route check to handle OAuth redirect
+- `frontend/src/components/SetupWizard.jsx` — Step 4 "Set up automatically" path with interactive Microsoft login flow (`AutoEntraSetup`); LDAP data preserved across OAuth redirect via sessionStorage
+- `frontend/src/components/UserDetail.jsx` — new "Cloud" tab with `CloudTab` component showing Entra Object ID, account status, last sign-in, MFA methods, licenses, and cloud group memberships
+
+---
 
 ### Phase 2 — Database Migration (Step 1)
 
