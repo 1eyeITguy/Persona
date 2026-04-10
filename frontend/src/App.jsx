@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, Outlet, NavLink } from 'react-router-dom'
 import { Settings, Shield, LogOut } from 'lucide-react'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
@@ -126,23 +126,63 @@ function AppShell() {
 
 function DirectoryPage() {
   const [selectedUserDn, setSelectedUserDn] = useState(null)
+  const [treeWidth, setTreeWidth] = useState(260)
+  const containerRef = useRef(null)
+
+  function startResize(e) {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = treeWidth
+
+    function onMouseMove(e) {
+      const containerLeft = containerRef.current?.getBoundingClientRect().left ?? 0
+      const containerWidth = containerRef.current?.getBoundingClientRect().width ?? 9999
+      const raw = startWidth + (e.clientX - startX)
+      // Min 160px; max: leave at least 400px for the detail panel
+      setTreeWidth(Math.max(160, Math.min(containerWidth - 400, raw)))
+    }
+
+    function onMouseUp() {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+  }
 
   return (
-    <div className="flex h-full overflow-hidden">
-      {/* Tree panel — narrows when a user is selected */}
+    <div ref={containerRef} className="flex h-full overflow-hidden">
+
+      {/* Tree panel — fixed pixel width when detail is open, flex-1 otherwise */}
       <div
-        className={`flex flex-col overflow-y-auto border-r border-border-subtle transition-[width] duration-200 ${
-          selectedUserDn ? 'w-64 shrink-0' : 'flex-1'
+        style={selectedUserDn ? { width: treeWidth, minWidth: treeWidth } : undefined}
+        className={`flex flex-col border-r border-border-subtle ${
+          selectedUserDn ? 'shrink-0' : 'flex-1'
         }`}
       >
-        <div className="border-b border-border-subtle px-4 py-3">
+        {/* Header — stays fixed while tree scrolls */}
+        <div className="shrink-0 border-b border-border-subtle px-4 py-3">
           <h2 className="text-sm font-medium text-slate-300">Active Directory</h2>
         </div>
-        <ADTree
-          onUserSelect={setSelectedUserDn}
-          selectedDn={selectedUserDn}
-        />
+
+        {/* Scrollable tree — vertical always, horizontal only when content overflows */}
+        <div className="flex-1 overflow-auto">
+          <ADTree
+            onUserSelect={setSelectedUserDn}
+            selectedDn={selectedUserDn}
+          />
+        </div>
       </div>
+
+      {/* Drag-to-resize handle — only visible when detail panel is open */}
+      {selectedUserDn && (
+        <div
+          onMouseDown={startResize}
+          title="Drag to resize"
+          className="w-1 shrink-0 cursor-col-resize select-none bg-border-subtle transition-colors hover:bg-brand-primary/50 active:bg-brand-primary/70"
+        />
+      )}
 
       {/* Full user detail — fills remaining space */}
       {selectedUserDn && (

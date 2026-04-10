@@ -66,7 +66,7 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
 
         {/* Label */}
         <span
-          className={`truncate text-sm ${
+          className={`whitespace-nowrap text-sm ${
             isSelected
               ? 'font-medium text-brand-primary'
               : isUser
@@ -143,7 +143,7 @@ export default function ADTree({ onUserSelect, selectedDn }) {
   if (!rootChildren) return null
 
   return (
-    <div className="py-2">
+    <div className="min-w-max py-2 pr-4">
       {rootChildren.map(node => (
         <TreeNode
           key={node.dn}
