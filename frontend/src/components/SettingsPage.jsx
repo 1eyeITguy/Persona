@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Loader2, ExternalLink, AlertTriangle } from 'lucide-react'
+import { Loader2, ExternalLink, AlertTriangle, CheckCircle, ChevronRight } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 
@@ -44,16 +44,35 @@ function ExpiryBadge({ isoDate }) {
 // EntraSection
 // ---------------------------------------------------------------------------
 
+const REQUIRED_PERMISSIONS = [
+  'User.Read.All',
+  'Group.Read.All',
+  'Directory.Read.All',
+  'AuditLog.Read.All',
+]
+
 function EntraSection({ authHeaders }) {
-  const [config, setConfig] = useState(null)    // null = not loaded, false = not configured
+  const [config, setConfig] = useState(null)    // null = loading, false = not configured, obj = configured
   const [loading, setLoading] = useState(true)
-  const [editing, setEditing] = useState(false)
+  const [saveResult, setSaveResult] = useState(null)
+  const [disconnecting, setDisconnecting] = useState(false)
+
+  // Connect flow state
+  // mode: null | 'choose' | 'auto' | 'manual'
+  // For 'auto': autoPhase: 'bootstrap' | 'creating' | 'done' | 'error'
+  const [mode, setMode] = useState(null)
+  const [autoPhase, setAutoPhase] = useState('bootstrap')
+  const [autoTenantId, setAutoTenantId] = useState('')
+  const [autoClientId, setAutoClientId] = useState('')
+  const [autoLoading, setAutoLoading] = useState(false)
+  const [autoError, setAutoError] = useState('')
+  const [autoResult, setAutoResult] = useState(null) // {client_id, secret_expires}
+
+  // Manual form state
   const [form, setForm] = useState({ tenant_id: '', client_id: '', client_secret: '', secret_expires: '' })
   const [testResult, setTestResult] = useState(null)
   const [testLoading, setTestLoading] = useState(false)
-  const [saveResult, setSaveResult] = useState(null)
   const [saveLoading, setSaveLoading] = useState(false)
-  const [disconnecting, setDisconnecting] = useState(false)
 
   const inputCls =
     'w-full rounded-md border border-border-subtle bg-app-bg px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary'
@@ -66,10 +85,81 @@ function EntraSection({ authHeaders }) {
       .catch(err => {
         if (err.response?.status === 404) setConfig(false)
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        setLoading(false)
+        // Check if we just returned from an OAuth redirect targeting this page
+        const sessionToken = sessionStorage.getItem('entra_session_token')
+        if (sessionToken) {
+          setMode('auto')
+          setAutoPhase('creating')
+          runCreateApp(sessionToken)
+        }
+      })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function startEditing() {
+  async function runCreateApp(sessionToken) {
+    try {
+      const res = await axios.post(
+        '/api/v1/entra/oauth2/create-app',
+        { session_token: sessionToken },
+        { headers: authHeaders() },
+      )
+      sessionStorage.removeItem('entra_session_token')
+      if (res.data.success) {
+        setAutoResult({ client_id: res.data.client_id, secret_expires: res.data.secret_expires })
+        setAutoPhase('done')
+        // Refresh config so connected summary appears after closing
+        axios
+          .get('/api/v1/entra/config', { headers: authHeaders() })
+          .then(r => setConfig(r.data))
+          .catch(() => {})
+      } else {
+        setAutoError(res.data.message || 'App Registration creation failed.')
+        setAutoPhase('error')
+      }
+    } catch (err) {
+      sessionStorage.removeItem('entra_session_token')
+      setAutoError(err.response?.data?.detail || 'App Registration creation failed.')
+      setAutoPhase('error')
+    }
+  }
+
+  async function handleAutoSignIn() {
+    if (!autoTenantId.trim() || !autoClientId.trim()) return
+    setAutoLoading(true)
+    setAutoError('')
+    try {
+      const redirectUri = `${window.location.origin}/entra-callback`
+      // Tell the callback page to return to Settings
+      sessionStorage.setItem('entra_callback_redirect', '/settings')
+      const res = await axios.post(
+        '/api/v1/entra/oauth2/start',
+        { tenant_id: autoTenantId.trim(), client_id: autoClientId.trim(), redirect_uri: redirectUri },
+        { headers: authHeaders() },
+      )
+      window.location.href = res.data.auth_url
+    } catch (err) {
+      setAutoLoading(false)
+      setAutoError(err.response?.data?.detail || 'Failed to start sign-in. Please try again.')
+    }
+  }
+
+  function resetAutoFlow() {
+    sessionStorage.removeItem('entra_session_token')
+    setAutoPhase('bootstrap')
+    setAutoError('')
+    setAutoLoading(false)
+    setAutoResult(null)
+  }
+
+  function cancelConnect() {
+    resetAutoFlow()
+    setMode(null)
+    setTestResult(null)
+    setSaveResult(null)
+  }
+
+  function startManualEdit() {
     setForm({
       tenant_id: config?.tenant_id || '',
       client_id: config?.client_id || '',
@@ -78,13 +168,7 @@ function EntraSection({ authHeaders }) {
     })
     setTestResult(null)
     setSaveResult(null)
-    setEditing(true)
-  }
-
-  function cancelEditing() {
-    setEditing(false)
-    setTestResult(null)
-    setSaveResult(null)
+    setMode('manual')
   }
 
   async function handleTest() {
@@ -104,7 +188,7 @@ function EntraSection({ authHeaders }) {
     }
   }
 
-  async function handleSave() {
+  async function handleManualSave() {
     setSaveResult(null)
     setSaveLoading(true)
     try {
@@ -114,7 +198,7 @@ function EntraSection({ authHeaders }) {
         { headers: authHeaders() },
       )
       setConfig(res.data)
-      setEditing(false)
+      setMode(null)
       setTestResult(null)
       setSaveResult({ success: true, message: 'Entra configuration saved.' })
     } catch (err) {
@@ -148,20 +232,19 @@ function EntraSection({ authHeaders }) {
       <p className="mb-6 text-sm text-slate-400">Microsoft Graph API connection</p>
 
       <div className="space-y-5 rounded-xl border border-border-subtle bg-surface p-6">
-        {/* Status row */}
-        {!editing && (
+
+        {/* ── Status row (idle state) ── */}
+        {mode === null && (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span
-                className={`h-2 w-2 rounded-full ${config ? 'bg-success' : 'bg-slate-600'}`}
-              />
+              <span className={`h-2 w-2 rounded-full ${config ? 'bg-success' : 'bg-slate-600'}`} />
               <span className="text-sm text-slate-300">
                 {config ? 'Connected' : 'Not configured'}
               </span>
               {config && <ExpiryBadge isoDate={config.secret_expires} />}
             </div>
             <button
-              onClick={startEditing}
+              onClick={() => config ? startManualEdit() : setMode('choose')}
               className="text-xs text-brand-primary hover:underline"
             >
               {config ? 'Edit' : 'Connect'}
@@ -170,7 +253,7 @@ function EntraSection({ authHeaders }) {
         )}
 
         {/* Connected summary */}
-        {!editing && config && (
+        {mode === null && config && (
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
               <span className="text-slate-500">Tenant ID</span>
@@ -187,9 +270,171 @@ function EntraSection({ authHeaders }) {
           </div>
         )}
 
-        {/* Edit form */}
-        {editing && (
+        {/* ── Choose mode ── */}
+        {mode === 'choose' && (
           <>
+            <p className="text-sm text-slate-400">How would you like to connect to Entra ID?</p>
+            <div className="space-y-3">
+              <button
+                onClick={() => setMode('auto')}
+                className="w-full rounded-lg border-2 border-brand-primary/40 bg-brand-primary/10 hover:bg-brand-primary/20 hover:border-brand-primary/60 p-4 text-left transition-colors group"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-white">Set up automatically</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Sign in as Global Admin — Persona creates the App Registration for you.
+                    </p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-slate-300 shrink-0" />
+                </div>
+              </button>
+              <button
+                onClick={() => { setMode('manual'); setForm({ tenant_id: '', client_id: '', client_secret: '', secret_expires: '' }) }}
+                className="w-full rounded-lg border border-border-subtle hover:border-slate-500 bg-transparent hover:bg-white/5 p-4 text-left transition-colors group"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-slate-300">Enter credentials manually</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      I already have an App Registration with the required permissions.
+                    </p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-slate-300 shrink-0" />
+                </div>
+              </button>
+            </div>
+            <button onClick={cancelConnect} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+              Cancel
+            </button>
+          </>
+        )}
+
+        {/* ── Auto setup flow ── */}
+        {mode === 'auto' && autoPhase === 'bootstrap' && (
+          <>
+            <button onClick={() => setMode('choose')} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+              ← Back
+            </button>
+
+            <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 text-xs text-slate-400 space-y-2">
+              <p className="font-medium text-slate-300">One-time prerequisite:</p>
+              <p>Create a <strong className="text-slate-300">public client</strong> App Registration in Azure Portal (no secret needed):</p>
+              <ol className="list-decimal list-inside space-y-1 pl-1">
+                <li>Azure Portal → Entra ID → App Registrations → New Registration</li>
+                <li>Single tenant, any name (e.g. "Persona Bootstrap")</li>
+                <li>Add redirect URI (Web): <code className="font-mono text-brand-primary break-all">{window.location.origin}/entra-callback</code></li>
+                <li>Add delegated permissions: <em>Application.ReadWrite.All</em>, <em>AppRoleAssignment.ReadWrite.All</em></li>
+              </ol>
+              <p className="text-slate-500">This bootstrap app is only needed once.</p>
+            </div>
+
+            <div>
+              <label className={labelCls}>Entra Tenant ID</label>
+              <input
+                className={inputCls}
+                value={autoTenantId}
+                onChange={e => setAutoTenantId(e.target.value)}
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Bootstrap App Client ID</label>
+              <input
+                className={inputCls}
+                value={autoClientId}
+                onChange={e => setAutoClientId(e.target.value)}
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              />
+            </div>
+
+            {autoError && (
+              <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{autoError}</p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleAutoSignIn}
+                disabled={autoLoading || !autoTenantId.trim() || !autoClientId.trim()}
+                className="flex items-center gap-2 rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {autoLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                Sign in with Microsoft →
+              </button>
+              <button onClick={cancelConnect} className="rounded-md border border-border-subtle px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+
+        {mode === 'auto' && autoPhase === 'creating' && (
+          <div className="flex flex-col items-center gap-3 py-4 text-center">
+            <Loader2 className="h-7 w-7 animate-spin text-brand-primary" />
+            <p className="text-sm font-medium text-slate-200">Creating App Registration…</p>
+            <p className="text-xs text-slate-500">Setting up permissions and granting admin consent.</p>
+          </div>
+        )}
+
+        {mode === 'auto' && autoPhase === 'done' && (
+          <>
+            <div className="rounded-md border border-success/30 bg-success/10 px-4 py-4 space-y-1.5">
+              <p className="text-sm font-medium text-success flex items-center gap-2">
+                <CheckCircle className="h-4 w-4 shrink-0" />
+                App Registration created successfully
+              </p>
+              {autoResult?.client_id && (
+                <p className="text-xs text-slate-500 font-mono break-all">Client ID: {autoResult.client_id}</p>
+              )}
+              {autoResult?.secret_expires && (
+                <p className="text-xs text-slate-500">Secret expires: {autoResult.secret_expires}</p>
+              )}
+            </div>
+            <button
+              onClick={() => setMode(null)}
+              className="text-sm text-brand-primary hover:underline"
+            >
+              Done
+            </button>
+          </>
+        )}
+
+        {mode === 'auto' && autoPhase === 'error' && (
+          <>
+            <div className="rounded-md bg-danger/10 border border-danger/20 px-4 py-3">
+              <p className="text-sm font-medium text-danger mb-1">Setup failed</p>
+              <p className="text-xs text-slate-400">{autoError}</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={resetAutoFlow} className="text-sm text-brand-primary hover:underline">
+                Try Again
+              </button>
+              <button onClick={cancelConnect} className="text-sm text-slate-500 hover:text-slate-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── Manual edit form ── */}
+        {mode === 'manual' && (
+          <>
+            <button onClick={() => config ? setMode(null) : setMode('choose')} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+              ← Back
+            </button>
+
+            {!config && (
+              <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 mb-1 text-xs text-slate-400 space-y-1">
+                <p className="font-medium text-slate-300 mb-1">Required API permissions:</p>
+                {REQUIRED_PERMISSIONS.map(p => (
+                  <div key={p} className="flex items-center gap-2">
+                    <CheckCircle className="h-3 w-3 text-success shrink-0" />
+                    <span>{p}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div>
               <label className={labelCls}>Entra Tenant ID</label>
               <input
@@ -215,14 +460,13 @@ function EntraSection({ authHeaders }) {
                 className={inputCls}
                 value={form.client_secret}
                 onChange={e => { setForm(p => ({ ...p, client_secret: e.target.value })); setTestResult(null) }}
-                placeholder="Enter client secret"
+                placeholder={config ? 'Enter new secret to replace' : 'Enter client secret'}
                 autoComplete="new-password"
               />
             </div>
             <div>
               <label className={labelCls}>
-                Secret Expiry Date{' '}
-                <span className="text-slate-500 font-normal">(optional)</span>
+                Secret Expiry Date <span className="text-slate-500 font-normal">(optional)</span>
               </label>
               <input
                 type="date"
@@ -251,18 +495,14 @@ function EntraSection({ authHeaders }) {
             </button>
 
             {testResult && (
-              <div
-                className={`rounded-md px-3 py-2 text-sm ${
-                  testResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'
-                }`}
-              >
+              <div className={`rounded-md px-3 py-2 text-sm ${testResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
                 {testResult.message}
               </div>
             )}
 
             <div className="flex gap-3 border-t border-border-subtle pt-4">
               <button
-                onClick={handleSave}
+                onClick={handleManualSave}
                 disabled={saveLoading || !testResult?.success}
                 className="flex items-center gap-2 rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -270,7 +510,7 @@ function EntraSection({ authHeaders }) {
                 Save
               </button>
               <button
-                onClick={cancelEditing}
+                onClick={cancelConnect}
                 className="rounded-md border border-border-subtle px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors"
               >
                 Cancel
@@ -280,7 +520,7 @@ function EntraSection({ authHeaders }) {
         )}
 
         {/* Disconnect */}
-        {!editing && config && (
+        {mode === null && config && (
           <div className="border-t border-border-subtle pt-4">
             <button
               onClick={handleDisconnect}
@@ -293,11 +533,7 @@ function EntraSection({ authHeaders }) {
         )}
 
         {saveResult && (
-          <div
-            className={`rounded-md px-3 py-2 text-sm ${
-              saveResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'
-            }`}
-          >
+          <div className={`rounded-md px-3 py-2 text-sm ${saveResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
             {saveResult.message}
           </div>
         )}

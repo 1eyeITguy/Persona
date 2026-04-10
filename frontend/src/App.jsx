@@ -59,7 +59,10 @@ function EntraCallbackPage() {
       .then(res => {
         if (res.data.success && res.data.session_token) {
           sessionStorage.setItem('entra_session_token', res.data.session_token)
-          window.location.replace('/')
+          // Redirect to wherever the flow originated (setup wizard or settings page)
+          const redirectTo = sessionStorage.getItem('entra_callback_redirect') || '/'
+          sessionStorage.removeItem('entra_callback_redirect')
+          window.location.replace(redirectTo)
         } else {
           setErrorMsg(res.data.message || 'Token exchange failed.')
           setStatus('error')
@@ -179,19 +182,6 @@ function AppShell() {
         <header className="flex items-center justify-between border-b border-border-subtle bg-surface px-6 py-3">
           <div />
           <div className="flex items-center gap-4">
-            {/* Connect to Entra — Phase 2 stub */}
-            <div className="relative group">
-              <button
-                disabled
-                className="cursor-not-allowed rounded-md bg-gradient-to-r from-brand-primary to-brand-accent px-4 py-1.5 text-sm font-medium text-white opacity-60"
-              >
-                Connect to Entra
-              </button>
-              <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-700 px-2 py-1 text-xs text-slate-200 opacity-0 transition-opacity group-hover:opacity-100">
-                Coming soon
-              </span>
-            </div>
-
             {/* User info + logout */}
             {user && (
               <>
