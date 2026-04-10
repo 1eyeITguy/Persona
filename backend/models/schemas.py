@@ -308,3 +308,30 @@ class ADUser(BaseModel):
     # ---- Attribute Editor ----
     # All LDAP attributes serialized to strings, sorted by name.
     raw_attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class ADUserSummary(BaseModel):
+    """
+    Lightweight user model returned by the search endpoint.
+
+    thumbnailPhoto is intentionally omitted — photos are large and are only
+    fetched when the caller requests the full ADUser object.
+    """
+
+    dn: str
+    display_name: Optional[str] = None
+    sam_account_name: str
+    title: Optional[str] = None
+    department: Optional[str] = None
+    office: Optional[str] = None           # physicalDeliveryOfficeName
+    mail: Optional[str] = None
+    account_status: str = "Enabled"        # "Enabled" | "Disabled" | "Locked Out"
+
+
+class FilterOptions(BaseModel):
+    """Distinct filterable values collected across all user objects plus group/OU lists."""
+
+    departments: list[str]
+    offices: list[str]
+    groups: list[GroupRef]   # All AD groups (security + distribution), name + dn
+    ous: list[GroupRef]      # All organizational units, name + dn

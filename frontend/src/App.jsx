@@ -8,6 +8,8 @@ import LoginForm from './components/LoginForm.jsx'
 import ADTree from './components/ADTree.jsx'
 import UserDetail from './components/UserDetail.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
+import SearchBar from './components/SearchBar.jsx'
+import SearchResults from './components/SearchResults.jsx'
 
 // ---------------------------------------------------------------------------
 // Loading screen
@@ -129,16 +131,22 @@ function DirectoryPage() {
   const [treeWidth, setTreeWidth] = useState(260)
   const containerRef = useRef(null)
 
+  // null  = no active search (tree shown)
+  // []    = search returned no results
+  // [...] = search results
+  const [searchResults, setSearchResults]   = useState(null)
+  const [isSearchLoading, setIsSearchLoading] = useState(false)
+
+  const isSearchActive = searchResults !== null
+
   function startResize(e) {
     e.preventDefault()
     const startX = e.clientX
     const startWidth = treeWidth
 
     function onMouseMove(e) {
-      const containerLeft = containerRef.current?.getBoundingClientRect().left ?? 0
       const containerWidth = containerRef.current?.getBoundingClientRect().width ?? 9999
       const raw = startWidth + (e.clientX - startX)
-      // Min 160px; max: leave at least 400px for the detail panel
       setTreeWidth(Math.max(160, Math.min(containerWidth - 400, raw)))
     }
 
@@ -151,47 +159,83 @@ function DirectoryPage() {
     window.addEventListener('mouseup', onMouseUp)
   }
 
+  function handleSearchResults(results) {
+    setSearchResults(results)
+    setIsSearchLoading(false)
+    setSelectedUserDn(null)
+  }
+
+  function handleSearchClear() {
+    setSearchResults(null)
+    setIsSearchLoading(false)
+    setSelectedUserDn(null)
+  }
+
   return (
-    <div ref={containerRef} className="flex h-full overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden">
 
-      {/* Tree panel — fixed pixel width when detail is open, flex-1 otherwise */}
-      <div
-        style={selectedUserDn ? { width: treeWidth, minWidth: treeWidth } : undefined}
-        className={`flex flex-col border-r border-border-subtle ${
-          selectedUserDn ? 'shrink-0' : 'flex-1'
-        }`}
-      >
-        {/* Header — stays fixed while tree scrolls */}
-        <div className="shrink-0 border-b border-border-subtle px-4 py-3">
-          <h2 className="text-sm font-medium text-slate-300">Active Directory</h2>
-        </div>
+      {/* Full-width search bar */}
+      <SearchBar
+        onResults={handleSearchResults}
+        onClear={handleSearchClear}
+        isActive={isSearchActive}
+      />
 
-        {/* Scrollable tree — vertical always, horizontal only when content overflows */}
-        <div className="flex-1 overflow-auto">
-          <ADTree
-            onUserSelect={setSelectedUserDn}
-            selectedDn={selectedUserDn}
-          />
-        </div>
-      </div>
+      {/* Split pane */}
+      <div ref={containerRef} className="flex flex-1 overflow-hidden">
 
-      {/* Drag-to-resize handle — only visible when detail panel is open */}
-      {selectedUserDn && (
+        {/* Left panel — tree or search results */}
         <div
-          onMouseDown={startResize}
-          title="Drag to resize"
-          className="w-1 shrink-0 cursor-col-resize select-none bg-border-subtle transition-colors hover:bg-brand-primary/50 active:bg-brand-primary/70"
-        />
-      )}
+          style={selectedUserDn ? { width: treeWidth, minWidth: treeWidth } : undefined}
+          className={`flex flex-col border-r border-border-subtle ${
+            selectedUserDn ? 'shrink-0' : 'flex-1'
+          }`}
+        >
+          {/* Panel header */}
+          <div className="shrink-0 border-b border-border-subtle px-4 py-3">
+            <h2 className="text-sm font-medium text-slate-300">
+              {isSearchActive
+                ? `Results (${searchResults.length})`
+                : 'Active Directory'}
+            </h2>
+          </div>
 
-      {/* Full user detail — fills remaining space */}
-      {selectedUserDn && (
-        <UserDetail
-          userDn={selectedUserDn}
-          onClose={() => setSelectedUserDn(null)}
-          onUserSelect={setSelectedUserDn}
-        />
-      )}
+          {/* Scrollable content */}
+          <div className="flex-1 overflow-auto">
+            {isSearchActive ? (
+              <SearchResults
+                results={searchResults}
+                isLoading={isSearchLoading}
+                selectedDn={selectedUserDn}
+                onUserSelect={setSelectedUserDn}
+              />
+            ) : (
+              <ADTree
+                onUserSelect={setSelectedUserDn}
+                selectedDn={selectedUserDn}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Drag-to-resize handle */}
+        {selectedUserDn && (
+          <div
+            onMouseDown={startResize}
+            title="Drag to resize"
+            className="w-1 shrink-0 cursor-col-resize select-none bg-border-subtle transition-colors hover:bg-brand-primary/50 active:bg-brand-primary/70"
+          />
+        )}
+
+        {/* User detail panel */}
+        {selectedUserDn && (
+          <UserDetail
+            userDn={selectedUserDn}
+            onClose={() => setSelectedUserDn(null)}
+            onUserSelect={setSelectedUserDn}
+          />
+        )}
+      </div>
     </div>
   )
 }

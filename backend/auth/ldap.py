@@ -22,7 +22,15 @@ from ldap3 import ALL, BASE, LEVEL, RESTARTABLE, SUBTREE, Connection, Server
 from ldap3.utils.conv import escape_filter_chars
 
 from backend.app_config import get_ldap_settings as _load_ldap_settings
-from backend.models.schemas import ADUser, GroupRef, LDAPSettings, TestConnectionResponse, UserRef
+from backend.models.schemas import (
+    ADUser,
+    ADUserSummary,
+    FilterOptions,
+    GroupRef,
+    LDAPSettings,
+    TestConnectionResponse,
+    UserRef,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +71,23 @@ def _filetime_to_iso(value: Optional[int]) -> Optional[str]:
         return dt.isoformat()
     except (OSError, OverflowError, ValueError):
         return None
+
+
+def _now_filetime() -> int:
+    """Current UTC time as a Windows FILETIME integer."""
+    return int(datetime.now(timezone.utc).timestamp() * 10_000_000) + _FILETIME_EPOCH_DELTA
+
+
+def _days_ago_filetime(days: int) -> int:
+    """Windows FILETIME for N days in the past."""
+    dt = datetime.now(timezone.utc) - timedelta(days=days)
+    return int(dt.timestamp() * 10_000_000) + _FILETIME_EPOCH_DELTA
+
+
+def _days_from_now_filetime(days: int) -> int:
+    """Windows FILETIME for N days in the future."""
+    dt = datetime.now(timezone.utc) + timedelta(days=days)
+    return int(dt.timestamp() * 10_000_000) + _FILETIME_EPOCH_DELTA
 
 
 def _decode_account_status(uac: Optional[int], lockout_time_raw: Optional[int]) -> str:
@@ -762,4 +787,211 @@ def query_user(dn: str) -> ADUser:
         photo=photo,
         # Attribute Editor
         raw_attributes=raw_attributes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# User search
+# ---------------------------------------------------------------------------
+
+_MATCHING_RULE_IN_CHAIN = "1.2.840.113556.1.4.1941"
+
+
+def search_users(
+    q: Optional[str] = None,
+    department: Optional[str] = None,
+    office: Optional[str] = None,
+    account_status: Optional[str] = None,
+    must_change_password: bool = False,
+    account_expiry: Optional[str] = None,
+    group_dn: Optional[str] = None,
+    last_logon: Optional[str] = None,
+    ou_dn: Optional[str] = None,
+) -> list[ADUserSummary]:
+    """
+    Search users across the directory with optional filters.
+
+    All text values are escape-sanitised before inclusion in the LDAP filter.
+    Returns up to 500 results sorted alphabetically by display name.
+
+    account_status : "enabled" | "disabled" | "locked"
+    account_expiry : "never" | "expired" | "soon"  (soon = within 30 days)
+    last_logon     : "never" | "30" | "90" | "180" (days since last logon)
+
+    Caller MUST use run_in_threadpool.
+    """
+    cfg = _load_ldap_settings()
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="LDAP not configured")
+
+    conn = get_service_connection()
+
+    # Build filter clauses — always start with the base user class filter
+    clauses: list[str] = ["(objectClass=user)(objectCategory=person)"]
+
+    if q:
+        safe = escape_filter_chars(q.strip())
+        clauses.append(f"(|(displayName=*{safe}*)(sAMAccountName=*{safe}*)(cn=*{safe}*))")
+
+    if department:
+        clauses.append(f"(department={escape_filter_chars(department)})")
+
+    if office:
+        clauses.append(f"(physicalDeliveryOfficeName={escape_filter_chars(office)})")
+
+    if account_status == "enabled":
+        clauses.append("(!(userAccountControl:1.2.840.113556.1.4.803:=2))")
+        clauses.append("(|(!(lockoutTime=*))(lockoutTime=0))")
+    elif account_status == "disabled":
+        clauses.append("(userAccountControl:1.2.840.113556.1.4.803:=2)")
+    elif account_status == "locked":
+        clauses.append("(lockoutTime>=1)")
+
+    if must_change_password:
+        clauses.append("(pwdLastSet=0)")
+
+    if account_expiry == "never":
+        clauses.append(f"(|(accountExpires=0)(accountExpires={_FILETIME_NEVER}))")
+    elif account_expiry == "expired":
+        now_ft = _now_filetime()
+        clauses.append(
+            f"(&(!(accountExpires=0))(!(accountExpires={_FILETIME_NEVER}))"
+            f"(accountExpires<={now_ft}))"
+        )
+    elif account_expiry == "soon":
+        now_ft = _now_filetime()
+        in30_ft = _days_from_now_filetime(30)
+        clauses.append(
+            f"(&(!(accountExpires=0))(!(accountExpires={_FILETIME_NEVER}))"
+            f"(accountExpires>={now_ft})(accountExpires<={in30_ft}))"
+        )
+
+    if group_dn:
+        safe_gdn = escape_filter_chars(group_dn)
+        clauses.append(f"(memberOf:{_MATCHING_RULE_IN_CHAIN}:={safe_gdn})")
+
+    if last_logon == "never":
+        clauses.append("(!(lastLogonTimestamp=*))")
+    elif last_logon in ("30", "90", "180"):
+        cutoff_ft = _days_ago_filetime(int(last_logon))
+        # Include users who never logged on OR last logged on before the cutoff
+        clauses.append(f"(|(!(lastLogonTimestamp=*))(lastLogonTimestamp<={cutoff_ft}))")
+
+    ldap_filter = "(&" + "".join(clauses) + ")"
+    search_base = ou_dn if ou_dn else cfg.base_dn
+
+    conn.search(
+        search_base=search_base,
+        search_filter=ldap_filter,
+        search_scope=SUBTREE,
+        attributes=[
+            "displayName",
+            "sAMAccountName",
+            "title",
+            "department",
+            "physicalDeliveryOfficeName",
+            "mail",
+            "userAccountControl",
+            "lockoutTime",
+        ],
+        size_limit=500,
+    )
+
+    results: list[ADUserSummary] = []
+    for e in conn.entries:
+        uac = _int(e, "userAccountControl")
+        lockout_raw = _int(e, "lockoutTime")
+        status = _decode_account_status(uac, lockout_raw)
+        results.append(
+            ADUserSummary(
+                dn=e.entry_dn,
+                display_name=_str(e, "displayName"),
+                sam_account_name=_str(e, "sAMAccountName") or "",
+                title=_str(e, "title"),
+                department=_str(e, "department"),
+                office=_str(e, "physicalDeliveryOfficeName"),
+                mail=_str(e, "mail"),
+                account_status=status,
+            )
+        )
+
+    conn.unbind()
+    return sorted(results, key=lambda u: (u.display_name or u.sam_account_name).lower())
+
+
+# ---------------------------------------------------------------------------
+# Filter option enumeration
+# ---------------------------------------------------------------------------
+
+
+def get_filter_options() -> FilterOptions:
+    """
+    Return distinct filterable values collected from all user objects, plus
+    a full list of groups and OUs for the dropdown menus.
+
+    Caller MUST use run_in_threadpool.
+    """
+    cfg = _load_ldap_settings()
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="LDAP not configured")
+
+    conn = get_service_connection()
+
+    # ---- Distinct department + office values from all user objects ----
+    conn.search(
+        search_base=cfg.base_dn,
+        search_filter="(&(objectClass=user)(objectCategory=person))",
+        search_scope=SUBTREE,
+        attributes=["department", "physicalDeliveryOfficeName"],
+        size_limit=5000,
+    )
+    departments: set[str] = set()
+    offices: set[str] = set()
+    for e in conn.entries:
+        d = _str(e, "department")
+        o = _str(e, "physicalDeliveryOfficeName")
+        if d:
+            departments.add(d)
+        if o:
+            offices.add(o)
+
+    # ---- All groups ----
+    conn.search(
+        search_base=cfg.base_dn,
+        search_filter="(objectClass=group)",
+        search_scope=SUBTREE,
+        attributes=["name", "distinguishedName"],
+        size_limit=1000,
+    )
+    groups = sorted(
+        [
+            GroupRef(name=_str(e, "name") or e.entry_dn, dn=e.entry_dn)
+            for e in conn.entries
+        ],
+        key=lambda g: g.name.lower(),
+    )
+
+    # ---- All OUs ----
+    conn.search(
+        search_base=cfg.base_dn,
+        search_filter="(objectClass=organizationalUnit)",
+        search_scope=SUBTREE,
+        attributes=["name", "distinguishedName"],
+        size_limit=500,
+    )
+    ous = sorted(
+        [
+            GroupRef(name=_str(e, "name") or e.entry_dn, dn=e.entry_dn)
+            for e in conn.entries
+        ],
+        key=lambda o: o.name.lower(),
+    )
+
+    conn.unbind()
+
+    return FilterOptions(
+        departments=sorted(departments),
+        offices=sorted(offices),
+        groups=groups,
+        ous=ous,
     )
