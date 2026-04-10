@@ -335,3 +335,75 @@ class FilterOptions(BaseModel):
     offices: list[str]
     groups: list[GroupRef]   # All AD groups (security + distribution), name + dn
     ous: list[GroupRef]      # All organizational units, name + dn
+
+
+# ---------------------------------------------------------------------------
+# Device (computer) models
+# ---------------------------------------------------------------------------
+
+
+class ADComputerSummary(BaseModel):
+    """Lightweight computer model returned by the device search endpoint."""
+
+    dn: str
+    name: str
+    dns_hostname: Optional[str] = None
+    operating_system: Optional[str] = None
+    description: Optional[str] = None
+    account_status: str = "Enabled"
+
+
+class ADComputer(BaseModel):
+    """
+    Full attribute set for a single AD computer object.
+
+    Covers all attributes visible in ADUC for computer objects, including
+    those shown under Advanced Features.
+    """
+
+    # ---- Core identity ----
+    dn: str
+    name: str
+    sam_account_name: str        # machine name + '$'
+    dns_hostname: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+
+    # ---- Operating System ----
+    operating_system: Optional[str] = None
+    operating_system_version: Optional[str] = None
+    operating_system_service_pack: Optional[str] = None
+
+    # ---- Account status & UAC ----
+    account_status: str = "Enabled"
+    uac_raw: Optional[int] = None
+    uac_flags: dict[str, bool] = Field(default_factory=dict)
+
+    # ---- Account dates ----
+    last_logon: Optional[str] = None      # lastLogonTimestamp (replicated, ~14d lag)
+    pwd_last_set: Optional[str] = None
+    bad_pwd_count: Optional[int] = None
+    when_created: Optional[str] = None    # ISO 8601
+    when_changed: Optional[str] = None    # ISO 8601
+
+    # ---- Organization ----
+    managed_by_dn: Optional[str] = None
+    managed_by_display_name: Optional[str] = None
+    member_of: list[GroupRef] = Field(default_factory=list)
+    primary_group_id: Optional[int] = None
+
+    # ---- Object metadata (Advanced Features) ----
+    object_sid: Optional[str] = None
+    object_guid: Optional[str] = None
+    usn_created: Optional[int] = None
+    usn_changed: Optional[int] = None
+
+    # ---- Attribute Editor ----
+    raw_attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeviceFilterOptions(BaseModel):
+    """Distinct filterable values for device search dropdowns."""
+
+    operating_systems: list[str]
+    ous: list[GroupRef]

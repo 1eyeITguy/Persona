@@ -1,12 +1,13 @@
 import { useState, useRef } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, Outlet, NavLink } from 'react-router-dom'
-import { Settings, Shield, LogOut } from 'lucide-react'
+import { Settings, Shield, LogOut, Users, Monitor } from 'lucide-react'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 import { useAppConfig } from './hooks/useAppConfig.js'
 import SetupWizard from './components/SetupWizard.jsx'
 import LoginForm from './components/LoginForm.jsx'
 import ADTree from './components/ADTree.jsx'
 import UserDetail from './components/UserDetail.jsx'
+import DeviceDetail from './components/DeviceDetail.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
 import SearchBar from './components/SearchBar.jsx'
 import SearchResults from './components/SearchResults.jsx'
@@ -44,20 +45,39 @@ function AppShell() {
 
         {/* Nav links */}
         <nav className="flex-1 px-3 py-4 space-y-1">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) =>
-              `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
-                isActive
-                  ? 'bg-brand-primary/20 text-brand-primary font-medium'
-                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
-              }`
-            }
-          >
-            <Shield className="h-4 w-4 shrink-0" />
+          {/* AD Directory group */}
+          <p className="flex items-center gap-2.5 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <Shield className="h-3.5 w-3.5 shrink-0" />
             AD Directory
-          </NavLink>
+          </p>
+          <div className="ml-2 space-y-0.5">
+            <NavLink
+              to="/users"
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                  isActive
+                    ? 'bg-brand-primary/20 text-brand-primary font-medium'
+                    : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                }`
+              }
+            >
+              <Users className="h-4 w-4 shrink-0" />
+              Users
+            </NavLink>
+            <NavLink
+              to="/devices"
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                  isActive
+                    ? 'bg-brand-primary/20 text-brand-primary font-medium'
+                    : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                }`
+              }
+            >
+              <Monitor className="h-4 w-4 shrink-0" />
+              Devices
+            </NavLink>
+          </div>
         </nav>
 
         {/* Gear — settings */}
@@ -126,7 +146,7 @@ function AppShell() {
 // Placeholder pages (replaced by Prompts 9 & 10)
 // ---------------------------------------------------------------------------
 
-function DirectoryPage() {
+function UsersPage() {
   const [selectedUserDn, setSelectedUserDn] = useState(null)
   const [treeWidth, setTreeWidth] = useState(260)
   const containerRef = useRef(null)
@@ -240,6 +260,85 @@ function DirectoryPage() {
   )
 }
 
+function DevicesPage() {
+  const [selectedDn, setSelectedDn]       = useState(null)
+  const [treeWidth, setTreeWidth]         = useState(260)
+  const containerRef                      = useRef(null)
+  const [searchResults, setSearchResults] = useState(null)
+  const [isSearchLoading, setIsSearchLoading] = useState(false)
+  const isSearchActive = searchResults !== null
+
+  function startResize(e) {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = treeWidth
+    function onMouseMove(e) {
+      const containerWidth = containerRef.current?.getBoundingClientRect().width ?? 9999
+      const raw = startWidth + (e.clientX - startX)
+      setTreeWidth(Math.max(160, Math.min(containerWidth - 400, raw)))
+    }
+    function onMouseUp() {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+  }
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden">
+      <SearchBar
+        mode="devices"
+        onResults={results => { setSearchResults(results); setIsSearchLoading(false); setSelectedDn(null) }}
+        onClear={() => { setSearchResults(null); setIsSearchLoading(false); setSelectedDn(null) }}
+        isActive={isSearchActive}
+      />
+      <div ref={containerRef} className="flex flex-1 overflow-hidden">
+        <div
+          style={selectedDn ? { width: treeWidth, minWidth: treeWidth } : undefined}
+          className={`flex flex-col border-r border-border-subtle ${selectedDn ? 'shrink-0' : 'flex-1'}`}
+        >
+          <div className="shrink-0 border-b border-border-subtle px-4 py-3">
+            <h2 className="text-sm font-medium text-slate-300">
+              {isSearchActive ? `Results (${searchResults.length})` : 'Active Directory'}
+            </h2>
+          </div>
+          <div className="flex-1 overflow-auto">
+            {isSearchActive ? (
+              <SearchResults
+                mode="devices"
+                results={searchResults}
+                isLoading={isSearchLoading}
+                selectedDn={selectedDn}
+                onUserSelect={setSelectedDn}
+              />
+            ) : (
+              <ADTree
+                mode="devices"
+                onUserSelect={setSelectedDn}
+                selectedDn={selectedDn}
+              />
+            )}
+          </div>
+        </div>
+        {selectedDn && (
+          <div
+            onMouseDown={startResize}
+            title="Drag to resize"
+            className="w-1 shrink-0 cursor-col-resize select-none bg-border-subtle transition-colors hover:bg-brand-primary/50 active:bg-brand-primary/70"
+          />
+        )}
+        {selectedDn && (
+          <DeviceDetail
+            deviceDn={selectedDn}
+            onClose={() => setSelectedDn(null)}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
 function SettingsPagePlaceholder() {
   return <SettingsPage />
 }
@@ -259,9 +358,11 @@ function AppRoutes() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route path="/" element={<DirectoryPage />} />
+        <Route path="/"        element={<Navigate to="/users" replace />} />
+        <Route path="/users"   element={<UsersPage />} />
+        <Route path="/devices" element={<DevicesPage />} />
         <Route path="/settings" element={<SettingsPagePlaceholder />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*"        element={<Navigate to="/users" replace />} />
       </Route>
     </Routes>
   )

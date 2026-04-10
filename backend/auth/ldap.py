@@ -23,8 +23,11 @@ from ldap3.utils.conv import escape_filter_chars
 
 from backend.app_config import get_ldap_settings as _load_ldap_settings
 from backend.models.schemas import (
+    ADComputer,
+    ADComputerSummary,
     ADUser,
     ADUserSummary,
+    DeviceFilterOptions,
     FilterOptions,
     GroupRef,
     LDAPSettings,
@@ -503,31 +506,46 @@ def test_ldap_connection(settings: LDAPSettings) -> TestConnectionResponse:
     )
 
 
-def query_tree(dn: str) -> list[dict]:
+def query_tree(dn: str, mode: str = "users") -> list[dict]:
     """
     Return one level of children for the given DN.
 
     Each child is a dict:
-        { dn, name, type: "ou"|"container"|"user", has_children: bool }
+        { dn, name, type: "ou"|"container"|"user"|"computer", has_children: bool }
 
-    Sorted: OUs and containers first (alphabetical), then users (alphabetical).
-    has_children is always False for user objects (leaves).
-    For OUs and containers a quick one-result probe determines has_children.
+    mode "users"   — includes user objects (objectCategory=person).
+                     OUs/containers are hidden when they contain no user objects
+                     anywhere in their subtree.
+    mode "devices" — includes computer objects.
+                     OUs/containers are hidden when they contain no computer objects
+                     anywhere in their subtree.
+
+    Sorted: OUs and containers first (alphabetical), then leaf nodes (alphabetical).
+    has_children is always False for leaf nodes (users / computers).
 
     Caller MUST use run_in_threadpool.
     """
     conn = get_service_connection()
 
-    # Include OUs, containers, and AD user/person objects.
-    # The objectCategory=person filter excludes computer accounts, which also
-    # carry objectClass=user in Active Directory.
-    tree_filter = (
-        "(|"
-        "(objectClass=organizationalUnit)"
-        "(objectClass=container)"
-        "(&(objectClass=user)(objectCategory=person))"
-        ")"
-    )
+    if mode == "devices":
+        leaf_filter = "(objectClass=computer)"
+        tree_filter = (
+            "(|"
+            "(objectClass=organizationalUnit)"
+            "(objectClass=container)"
+            "(objectClass=computer)"
+            ")"
+        )
+    else:  # "users" (default)
+        # objectCategory=person excludes computer accounts, which inherit objectClass=user
+        leaf_filter = "(&(objectClass=user)(objectCategory=person))"
+        tree_filter = (
+            "(|"
+            "(objectClass=organizationalUnit)"
+            "(objectClass=container)"
+            "(&(objectClass=user)(objectCategory=person))"
+            ")"
+        )
 
     conn.search(
         search_base=dn,
@@ -541,27 +559,34 @@ def query_tree(dn: str) -> list[dict]:
     results: list[dict] = []
     for entry in raw_entries:
         entry_dn = entry.entry_dn
-        classes = _object_classes(entry)
-        name = _str(entry, "name") or entry_dn
+        classes  = _object_classes(entry)
+        name     = _str(entry, "name") or entry_dn
 
         if "organizationalunit" in classes:
             node_type = "ou"
-        elif "person" in classes or "user" in classes:
+        elif mode == "devices" and "computer" in classes:
+            node_type = "computer"
+        elif mode != "devices" and ("person" in classes or "user" in classes):
             node_type = "user"
         else:
             node_type = "container"
 
-        # Probe for children (OUs/containers only — users are always leaves)
+        is_leaf = node_type in ("user", "computer")
+
+        # For OUs/containers: probe for relevant leaf objects in the subtree.
+        # Skip this OU/container entirely if none exist.
         has_children = False
-        if node_type != "user":
+        if not is_leaf:
             conn.search(
                 search_base=entry_dn,
-                search_filter=tree_filter,
-                search_scope=LEVEL,
+                search_filter=leaf_filter,
+                search_scope=SUBTREE,
                 attributes=[],
                 size_limit=1,
             )
-            has_children = len(conn.entries) > 0
+            if not conn.entries:
+                continue  # no relevant objects in subtree — hide this node
+            has_children = True  # at least one descendant exists → show chevron
 
         results.append(
             {
@@ -574,16 +599,16 @@ def query_tree(dn: str) -> list[dict]:
 
     conn.unbind()
 
-    # OUs/containers first (alpha), users second (alpha)
+    leaf_type = "computer" if mode == "devices" else "user"
     ous = sorted(
         [r for r in results if r["type"] in ("ou", "container")],
         key=lambda r: r["name"].lower(),
     )
-    users = sorted(
-        [r for r in results if r["type"] == "user"],
+    leaves = sorted(
+        [r for r in results if r["type"] == leaf_type],
         key=lambda r: r["name"].lower(),
     )
-    return ous + users
+    return ous + leaves
 
 
 def query_user(dn: str) -> ADUser:
@@ -993,5 +1018,260 @@ def get_filter_options() -> FilterOptions:
         departments=sorted(departments),
         offices=sorted(offices),
         groups=groups,
+        ous=ous,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Computer / device queries
+# ---------------------------------------------------------------------------
+
+
+def query_computer(dn: str) -> ADComputer:
+    """
+    Return a fully populated ADComputer model for the given computer DN.
+
+    Extra LDAP queries performed:
+        - 1 query to resolve managedBy DN → displayName
+        - N queries to resolve memberOf DNs → GroupRef objects
+
+    Raises:
+        HTTPException 404 — DN not found.
+        HTTPException 503 — (propagated from get_service_connection)
+
+    Caller MUST use run_in_threadpool.
+    """
+    conn = get_service_connection()
+
+    conn.search(
+        search_base=dn,
+        search_filter="(objectClass=*)",
+        search_scope=BASE,
+        attributes=["*", "uSNCreated", "uSNChanged"],
+    )
+
+    if not conn.entries:
+        conn.unbind()
+        raise HTTPException(status_code=404, detail="Computer not found")
+
+    e = conn.entries[0]
+
+    # Account status — computers don't lock out the way users do
+    uac = _int(e, "userAccountControl")
+    account_status = "Disabled" if (uac is not None and uac & 0x0002) else "Enabled"
+    uac_flags = _decode_uac_flags(uac)
+
+    # Dates
+    last_logon   = _filetime_to_iso(_int(e, "lastLogonTimestamp"))
+    pwd_last_set = _filetime_to_iso(_int(e, "pwdLastSet"))
+    when_created = _str(e, "whenCreated")
+    when_changed = _str(e, "whenChanged")
+
+    # objectSid
+    try:
+        sid_raw = e["objectSid"].value
+        if isinstance(sid_raw, str):
+            object_sid: Optional[str] = sid_raw
+        elif isinstance(sid_raw, (bytes, bytearray)):
+            object_sid = _bytes_to_sid(sid_raw)
+        else:
+            object_sid = str(sid_raw) if sid_raw is not None else None
+    except Exception:
+        object_sid = None
+
+    # objectGUID
+    try:
+        guid_raw = e["objectGUID"].value
+        if isinstance(guid_raw, str):
+            object_guid: Optional[str] = guid_raw
+        elif isinstance(guid_raw, (bytes, bytearray)):
+            object_guid = _bytes_to_guid(guid_raw)
+        else:
+            object_guid = str(guid_raw) if guid_raw is not None else None
+    except Exception:
+        object_guid = None
+
+    # managedBy
+    managed_by_dn = _str(e, "managedBy")
+    managed_by_display_name = None
+    if managed_by_dn:
+        conn.search(
+            search_base=managed_by_dn,
+            search_filter="(objectClass=*)",
+            search_scope=BASE,
+            attributes=["displayName", "name"],
+        )
+        if conn.entries:
+            managed_by_display_name = (
+                _str(conn.entries[0], "displayName") or _str(conn.entries[0], "name")
+            )
+
+    # memberOf
+    member_of: list[GroupRef] = []
+    for group_dn_val in _list(e, "memberOf"):
+        conn.search(
+            search_base=group_dn_val,
+            search_filter="(objectClass=*)",
+            search_scope=BASE,
+            attributes=["name"],
+        )
+        if conn.entries:
+            gname = _str(conn.entries[0], "name")
+            if gname:
+                member_of.append(GroupRef(name=gname, dn=group_dn_val))
+
+    raw_attributes = _serialize_raw(e)
+    conn.unbind()
+
+    return ADComputer(
+        dn=dn,
+        name=_str(e, "name") or _str(e, "cn") or "",
+        sam_account_name=_str(e, "sAMAccountName") or "",
+        dns_hostname=_str(e, "dNSHostName"),
+        description=_str(e, "description"),
+        location=_str(e, "location"),
+        operating_system=_str(e, "operatingSystem"),
+        operating_system_version=_str(e, "operatingSystemVersion"),
+        operating_system_service_pack=_str(e, "operatingSystemServicePack"),
+        account_status=account_status,
+        uac_raw=uac,
+        uac_flags=uac_flags,
+        last_logon=last_logon,
+        pwd_last_set=pwd_last_set,
+        when_created=when_created,
+        when_changed=when_changed,
+        bad_pwd_count=_int(e, "badPwdCount"),
+        managed_by_dn=managed_by_dn,
+        managed_by_display_name=managed_by_display_name,
+        member_of=member_of,
+        primary_group_id=_int(e, "primaryGroupID"),
+        object_sid=object_sid,
+        object_guid=object_guid,
+        usn_created=_int(e, "uSNCreated"),
+        usn_changed=_int(e, "uSNChanged"),
+        raw_attributes=raw_attributes,
+    )
+
+
+def search_computers(
+    q: Optional[str] = None,
+    operating_system: Optional[str] = None,
+    account_status: Optional[str] = None,
+    last_logon: Optional[str] = None,
+    ou_dn: Optional[str] = None,
+) -> list[ADComputerSummary]:
+    """
+    Search computer objects with optional filters. Returns up to 500 results
+    sorted alphabetically by computer name.
+
+    account_status : "enabled" | "disabled"
+    last_logon     : "never" | "30" | "90" | "180" (days since last logon)
+
+    Caller MUST use run_in_threadpool.
+    """
+    cfg = _load_ldap_settings()
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="LDAP not configured")
+
+    conn = get_service_connection()
+
+    clauses: list[str] = ["(objectClass=computer)"]
+
+    if q:
+        safe = escape_filter_chars(q.strip())
+        clauses.append(f"(|(cn=*{safe}*)(dNSHostName=*{safe}*))")
+
+    if operating_system:
+        clauses.append(f"(operatingSystem={escape_filter_chars(operating_system)})")
+
+    if account_status == "enabled":
+        clauses.append("(!(userAccountControl:1.2.840.113556.1.4.803:=2))")
+    elif account_status == "disabled":
+        clauses.append("(userAccountControl:1.2.840.113556.1.4.803:=2)")
+
+    if last_logon == "never":
+        clauses.append("(!(lastLogonTimestamp=*))")
+    elif last_logon in ("30", "90", "180"):
+        cutoff_ft = _days_ago_filetime(int(last_logon))
+        clauses.append(f"(|(!(lastLogonTimestamp=*))(lastLogonTimestamp<={cutoff_ft}))")
+
+    ldap_filter  = "(&" + "".join(clauses) + ")"
+    search_base  = ou_dn if ou_dn else cfg.base_dn
+
+    conn.search(
+        search_base=search_base,
+        search_filter=ldap_filter,
+        search_scope=SUBTREE,
+        attributes=[
+            "cn", "name", "dNSHostName", "operatingSystem",
+            "description", "userAccountControl",
+        ],
+        size_limit=500,
+    )
+
+    results: list[ADComputerSummary] = []
+    for e in conn.entries:
+        uac    = _int(e, "userAccountControl")
+        status = "Disabled" if (uac is not None and uac & 0x0002) else "Enabled"
+        results.append(
+            ADComputerSummary(
+                dn=e.entry_dn,
+                name=_str(e, "name") or _str(e, "cn") or "",
+                dns_hostname=_str(e, "dNSHostName"),
+                operating_system=_str(e, "operatingSystem"),
+                description=_str(e, "description"),
+                account_status=status,
+            )
+        )
+
+    conn.unbind()
+    return sorted(results, key=lambda c: c.name.lower())
+
+
+def get_device_filter_options() -> DeviceFilterOptions:
+    """
+    Return distinct operating system values and all OUs for device search dropdowns.
+    Caller MUST use run_in_threadpool.
+    """
+    cfg = _load_ldap_settings()
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="LDAP not configured")
+
+    conn = get_service_connection()
+
+    # Distinct operatingSystem values from all computer objects
+    conn.search(
+        search_base=cfg.base_dn,
+        search_filter="(objectClass=computer)",
+        search_scope=SUBTREE,
+        attributes=["operatingSystem"],
+        size_limit=5000,
+    )
+    os_set: set[str] = set()
+    for e in conn.entries:
+        os_val = _str(e, "operatingSystem")
+        if os_val:
+            os_set.add(os_val)
+
+    # All OUs
+    conn.search(
+        search_base=cfg.base_dn,
+        search_filter="(objectClass=organizationalUnit)",
+        search_scope=SUBTREE,
+        attributes=["name", "distinguishedName"],
+        size_limit=500,
+    )
+    ous = sorted(
+        [
+            GroupRef(name=_str(e, "name") or e.entry_dn, dn=e.entry_dn)
+            for e in conn.entries
+        ],
+        key=lambda o: o.name.lower(),
+    )
+
+    conn.unbind()
+
+    return DeviceFilterOptions(
+        operating_systems=sorted(os_set),
         ous=ous,
     )

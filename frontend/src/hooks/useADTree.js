@@ -9,7 +9,7 @@ import axios from 'axios'
  * Children are cached by DN after the first fetch — collapsing/re-expanding
  * never re-fetches (except on explicit error-retry).
  */
-export function useADTree(getToken) {
+export function useADTree(getToken, mode = 'users') {
   // DN → ADNode[] children
   const [nodeMap, setNodeMap] = useState({})
   // Set of DNs currently being fetched (uses '__root__' for the initial tree load)
@@ -38,7 +38,7 @@ export function useADTree(getToken) {
     fetchedRef.current.add('__root__')
     setLoadingSet(prev => new Set([...prev, '__root__']))
     try {
-      const res = await axios.get('/api/v1/ad/tree', { headers: buildHeaders() })
+      const res = await axios.get('/api/v1/ad/tree', { params: { mode }, headers: buildHeaders() })
       const { dn, children } = res.data
       setRootDn(dn)
       setNodeMap(prev => ({ ...prev, [dn]: children }))
@@ -56,7 +56,7 @@ export function useADTree(getToken) {
     setLoadingSet(prev => new Set([...prev, dn]))
     try {
       const enc = encodeURIComponent(dn)
-      const res = await axios.get(`/api/v1/ad/ou/${enc}/children`, { headers: buildHeaders() })
+      const res = await axios.get(`/api/v1/ad/ou/${enc}/children`, { params: { mode }, headers: buildHeaders() })
       setNodeMap(prev => ({ ...prev, [dn]: res.data }))
     } catch {
       fetchedRef.current.delete(dn)

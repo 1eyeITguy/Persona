@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Folder, User, ChevronRight, Loader2, AlertCircle } from 'lucide-react'
+import { Folder, User, Monitor, ChevronRight, Loader2, AlertCircle } from 'lucide-react'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useADTree } from '../hooks/useADTree.js'
 
@@ -9,15 +9,15 @@ import { useADTree } from '../hooks/useADTree.js'
 
 function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
   const { nodeMap, loadingSet, errorMap, expandedSet, toggleExpand } = treeState
-  const isUser     = node.type === 'user'
+  const isLeaf     = node.type === 'user' || node.type === 'computer'
   const isExpanded = expandedSet.has(node.dn)
   const isLoading  = loadingSet.has(node.dn)
-  const isSelected = isUser && node.dn === selectedDn
+  const isSelected = isLeaf && node.dn === selectedDn
   const error      = errorMap[node.dn]
   const children   = nodeMap[node.dn]
 
   function handleClick() {
-    if (isUser) {
+    if (isLeaf) {
       onUserSelect(node.dn)
     } else if (node.has_children) {
       toggleExpand(node.dn)
@@ -37,7 +37,7 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
         }`}
       >
         {/* Chevron — only for containers/OUs with children */}
-        {!isUser ? (
+        {!isLeaf ? (
           <ChevronRight
             className={`h-3.5 w-3.5 shrink-0 transition-transform duration-200 ${
               isSelected ? 'text-brand-primary' : 'text-slate-500'
@@ -49,10 +49,14 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
           <span className="inline-block h-3.5 w-3.5 shrink-0" />
         )}
 
-        {/* Icon — spinner during fetch, otherwise folder or person */}
+        {/* Icon — spinner during fetch, otherwise folder / person / monitor */}
         {isLoading ? (
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-brand-primary" />
-        ) : isUser ? (
+        ) : node.type === 'computer' ? (
+          <Monitor
+            className={`h-4 w-4 shrink-0 ${isSelected ? 'text-brand-primary' : 'text-slate-400'}`}
+          />
+        ) : node.type === 'user' ? (
           <User
             className={`h-4 w-4 shrink-0 ${isSelected ? 'text-brand-primary' : 'text-slate-400'}`}
           />
@@ -69,7 +73,7 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
           className={`whitespace-nowrap text-sm ${
             isSelected
               ? 'font-medium text-brand-primary'
-              : isUser
+              : isLeaf
               ? 'text-slate-300 hover:text-white'
               : 'font-medium text-slate-200'
           }`}
@@ -109,9 +113,9 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
 // ADTree — root component
 // ---------------------------------------------------------------------------
 
-export default function ADTree({ onUserSelect, selectedDn }) {
+export default function ADTree({ onUserSelect, selectedDn, mode = 'users' }) {
   const { getToken } = useAuth()
-  const treeState = useADTree(getToken)
+  const treeState = useADTree(getToken, mode)
   const { nodeMap, loadingSet, errorMap, rootDn, fetchRoot } = treeState
 
   // Load the root level once on mount

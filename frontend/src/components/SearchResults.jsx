@@ -21,7 +21,7 @@ function statusChip(status) {
 // SearchResults
 // ---------------------------------------------------------------------------
 
-export default function SearchResults({ results, isLoading, selectedDn, onUserSelect }) {
+export default function SearchResults({ results, isLoading, selectedDn, onUserSelect, mode = 'users' }) {
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 p-4 text-sm text-slate-400">
@@ -44,8 +44,12 @@ export default function SearchResults({ results, isLoading, selectedDn, onUserSe
     <div className="min-w-max py-2 pr-4">
       {results.map(user => {
         const isSelected = user.dn === selectedDn
-        const label      = user.display_name || user.sam_account_name
-        const subtitle   = [user.department, user.office].filter(Boolean).join(' · ')
+        const label      = mode === 'devices'
+          ? (user.name || user.dns_hostname || user.dn)
+          : (user.display_name || user.sam_account_name)
+        const subtitle   = mode === 'devices'
+          ? [user.operating_system, user.dns_hostname].filter(Boolean).join(' · ')
+          : [user.department, user.office].filter(Boolean).join(' · ')
 
         return (
           <div
