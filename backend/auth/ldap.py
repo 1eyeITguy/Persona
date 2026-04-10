@@ -551,7 +551,7 @@ def query_tree(dn: str, mode: str = "users") -> list[dict]:
         search_base=dn,
         search_filter=tree_filter,
         search_scope=LEVEL,
-        attributes=["objectClass", "name", "distinguishedName"],
+        attributes=["objectClass", "name", "distinguishedName", "thumbnailPhoto"],
     )
 
     raw_entries = list(conn.entries)  # snapshot before subsequent searches
@@ -588,12 +588,22 @@ def query_tree(dn: str, mode: str = "users") -> list[dict]:
                 continue  # no relevant objects in subtree — hide this node
             has_children = True  # at least one descendant exists → show chevron
 
+        photo: str | None = None
+        if node_type == "user":
+            try:
+                photo_raw = entry["thumbnailPhoto"].value
+                if isinstance(photo_raw, (bytes, bytearray)) and photo_raw:
+                    photo = _photo_data_url(bytes(photo_raw))
+            except Exception:
+                pass
+
         results.append(
             {
                 "dn": entry_dn,
                 "name": name,
                 "type": node_type,
                 "has_children": has_children,
+                "photo": photo,
             }
         )
 
@@ -918,6 +928,7 @@ def search_users(
             "mail",
             "userAccountControl",
             "lockoutTime",
+            "thumbnailPhoto",
         ],
         size_limit=500,
     )
@@ -927,6 +938,13 @@ def search_users(
         uac = _int(e, "userAccountControl")
         lockout_raw = _int(e, "lockoutTime")
         status = _decode_account_status(uac, lockout_raw)
+        photo: str | None = None
+        try:
+            photo_raw = e["thumbnailPhoto"].value
+            if isinstance(photo_raw, (bytes, bytearray)) and photo_raw:
+                photo = _photo_data_url(bytes(photo_raw))
+        except Exception:
+            pass
         results.append(
             ADUserSummary(
                 dn=e.entry_dn,
@@ -937,6 +955,7 @@ def search_users(
                 office=_str(e, "physicalDeliveryOfficeName"),
                 mail=_str(e, "mail"),
                 account_status=status,
+                photo=photo,
             )
         )
 

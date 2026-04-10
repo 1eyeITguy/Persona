@@ -57,9 +57,20 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
             className={`h-4 w-4 shrink-0 ${isSelected ? 'text-brand-primary' : 'text-slate-400'}`}
           />
         ) : node.type === 'user' ? (
-          <User
-            className={`h-4 w-4 shrink-0 ${isSelected ? 'text-brand-primary' : 'text-slate-400'}`}
-          />
+          node.photo ? (
+            <img
+              src={node.photo}
+              alt=""
+              className={`h-4 w-4 shrink-0 rounded-full object-cover ring-1 ${
+                isSelected ? 'ring-brand-primary' : 'ring-slate-600'
+              }`}
+              onError={e => { e.currentTarget.style.display = 'none' }}
+            />
+          ) : (
+            <User
+              className={`h-4 w-4 shrink-0 ${isSelected ? 'text-brand-primary' : 'text-slate-400'}`}
+            />
+          )
         ) : (
           <Folder
             className={`h-4 w-4 shrink-0 transition-colors ${

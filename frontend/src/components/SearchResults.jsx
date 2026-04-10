@@ -60,7 +60,19 @@ export default function SearchResults({ results, isLoading, selectedDn, onUserSe
             }`}
           >
             {/* Avatar */}
+            {mode !== 'devices' && user.photo ? (
+              <img
+                src={user.photo}
+                alt=""
+                className="h-8 w-8 shrink-0 rounded-full object-cover"
+                onError={e => {
+                  e.currentTarget.style.display = 'none'
+                  e.currentTarget.nextSibling.style.display = 'flex'
+                }}
+              />
+            ) : null}
             <div
+              style={mode !== 'devices' && user.photo ? { display: 'none' } : undefined}
               className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                 isSelected
                   ? 'bg-brand-primary text-white'

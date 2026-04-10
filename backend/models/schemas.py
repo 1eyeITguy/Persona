@@ -277,6 +277,7 @@ class ADNode(BaseModel):
     name: str
     type: str  # "ou" | "container" | "user"
     has_children: bool
+    photo: Optional[str] = None  # base64 data URL; only set for user nodes that have a thumbnailPhoto
 
 
 class ADTreeResponse(BaseModel):
@@ -385,12 +386,7 @@ class ADUser(BaseModel):
 
 
 class ADUserSummary(BaseModel):
-    """
-    Lightweight user model returned by the search endpoint.
-
-    thumbnailPhoto is intentionally omitted — photos are large and are only
-    fetched when the caller requests the full ADUser object.
-    """
+    """Lightweight user model returned by the search endpoint."""
 
     dn: str
     display_name: Optional[str] = None
@@ -400,6 +396,7 @@ class ADUserSummary(BaseModel):
     office: Optional[str] = None           # physicalDeliveryOfficeName
     mail: Optional[str] = None
     account_status: str = "Enabled"        # "Enabled" | "Disabled" | "Locked Out"
+    photo: Optional[str] = None            # base64 data URL from thumbnailPhoto
 
 
 class FilterOptions(BaseModel):
