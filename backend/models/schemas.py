@@ -300,6 +300,11 @@ class ADUser(BaseModel):
     when_created: Optional[str] = None      # ISO 8601
     when_changed: Optional[str] = None      # ISO 8601
 
+    # ---- Profile photo ----
+    # Base64 data URL (data:image/jpeg;base64,...) from thumbnailPhoto (AD) or
+    # Graph API (Entra).  None when no photo is stored.
+    photo: Optional[str] = None
+
     # ---- Attribute Editor ----
     # All LDAP attributes serialized to strings, sorted by name.
     raw_attributes: dict[str, Any] = Field(default_factory=dict)

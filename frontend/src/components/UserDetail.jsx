@@ -414,10 +414,11 @@ function Skeleton() {
 
 export default function UserDetail({ userDn, onClose, onUserSelect }) {
   const { getToken } = useAuth()
-  const [user, setUser]       = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState(null)
+  const [user, setUser]           = useState(null)
+  const [loading, setLoading]     = useState(false)
+  const [error, setError]         = useState(null)
   const [activeTab, setActiveTab] = useState('general')
+  const [photoError, setPhotoError] = useState(false)
 
   useEffect(() => {
     if (!userDn) return
@@ -425,6 +426,7 @@ export default function UserDetail({ userDn, onClose, onUserSelect }) {
     setError(null)
     setLoading(true)
     setActiveTab('general')
+    setPhotoError(false)
     const token = getToken()
     axios
       .get(`/api/v1/ad/user/${encodeURIComponent(userDn)}`, {
@@ -480,9 +482,18 @@ export default function UserDetail({ userDn, onClose, onUserSelect }) {
         <>
           {/* ── Identity header ── */}
           <div className="flex shrink-0 items-center gap-4 border-b border-border-subtle px-5 py-4">
-            <div className="flex h-14 w-14 shrink-0 select-none items-center justify-center rounded-full bg-brand-primary text-lg font-bold text-white">
-              {getInitials(user.display_name)}
-            </div>
+            {user.photo && !photoError ? (
+              <img
+                src={user.photo}
+                alt=""
+                onError={() => setPhotoError(true)}
+                className="h-14 w-14 shrink-0 rounded-full object-cover ring-2 ring-white/10"
+              />
+            ) : (
+              <div className="flex h-14 w-14 shrink-0 select-none items-center justify-center rounded-full bg-brand-primary text-lg font-bold text-white">
+                {getInitials(user.display_name)}
+              </div>
+            )}
             <div className="min-w-0">
               <p className="truncate text-base font-semibold text-white">
                 {user.display_name || user.sam_account_name}

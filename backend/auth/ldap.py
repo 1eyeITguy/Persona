@@ -10,6 +10,7 @@ Passwords are NEVER logged or included in exception detail strings.
 
 from __future__ import annotations
 
+import base64
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -215,6 +216,14 @@ def _raw_attr_value(entry: ldap3.Entry, attr: str) -> object:
         return entry[attr].value
     except Exception:
         return None
+
+
+def _photo_data_url(data: bytes) -> str:
+    """Convert raw thumbnailPhoto bytes to a base64 data URL."""
+    mime = "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        mime = "image/png"
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
 
 
 def _serialize_raw(entry: ldap3.Entry) -> dict[str, str]:
@@ -678,6 +687,15 @@ def query_user(dn: str) -> ADUser:
             if display:
                 direct_reports.append(UserRef(name=display, dn=dr_dn))
 
+    # ---- Profile photo ----
+    photo: str | None = None
+    try:
+        photo_raw = e["thumbnailPhoto"].value
+        if isinstance(photo_raw, (bytes, bytearray)) and photo_raw:
+            photo = _photo_data_url(bytes(photo_raw))
+    except Exception:
+        pass
+
     # ---- Raw attributes for Attribute Editor ----
     raw_attributes = _serialize_raw(e)
 
@@ -740,6 +758,8 @@ def query_user(dn: str) -> ADUser:
         usn_changed=_int(e, "uSNChanged"),
         when_created=when_created,
         when_changed=when_changed,
+        # Photo
+        photo=photo,
         # Attribute Editor
         raw_attributes=raw_attributes,
     )
