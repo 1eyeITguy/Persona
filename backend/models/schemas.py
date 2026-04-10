@@ -8,12 +8,12 @@ Organised into logical groups:
                        TestConnectionResponse, SetupRequest)
   - Entra models      (EntraConfigUpdate, EntraConfigResponse,
                        TestEntraConnectionRequest, TestEntraConnectionResponse)
-  - AD models         (ADNode, ADTreeResponse, ADUser)
+  - AD models         (ADNode, ADTreeResponse, GroupRef, UserRef, ADUser)
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,7 @@ class LDAPSettings(BaseModel):
     base_dn: str
     service_account_dn: str
     service_account_password: str
+    allowed_group_dn: Optional[str] = None  # if set, only members may log in
 
 
 class LocalAdmin(BaseModel):
@@ -135,6 +136,7 @@ class LDAPSettingsUpdate(BaseModel):
     base_dn: str
     service_account_dn: str
     service_account_password: Optional[str] = None
+    allowed_group_dn: Optional[str] = None  # empty string normalised to None by the route
 
 
 class BootstrapRequest(BaseModel):
@@ -208,28 +210,96 @@ class ADTreeResponse(BaseModel):
     children: list[ADNode]
 
 
-class ADUser(BaseModel):
-    """Full attribute set for a single AD user object."""
+class GroupRef(BaseModel):
+    """A resolved reference to an AD group returned with the user object."""
 
+    name: str
+    dn: str
+
+
+class UserRef(BaseModel):
+    """A resolved reference to an AD user (manager, direct report)."""
+
+    name: str
+    dn: str
+
+
+class ADUser(BaseModel):
+    """
+    Full attribute set for a single AD user object.
+
+    Covers all attributes visible in ADUC (including those normally hidden
+    behind Advanced Features), plus a raw_attributes dump for the
+    Attribute Editor view.
+    """
+
+    # ---- Core identity ----
     dn: str
     sam_account_name: str
     upn: Optional[str] = None
     display_name: Optional[str] = None
     given_name: Optional[str] = None
     surname: Optional[str] = None
+    initials: Optional[str] = None
+    description: Optional[str] = None
+
+    # ---- Contact ----
     mail: Optional[str] = None
     telephone_number: Optional[str] = None
     mobile: Optional[str] = None
+    web_page: Optional[str] = None          # wWWHomePage
+
+    # ---- Office ----
+    office: Optional[str] = None            # physicalDeliveryOfficeName
+
+    # ---- Address ----
+    street_address: Optional[str] = None
+    city: Optional[str] = None              # l
+    state: Optional[str] = None             # st
+    postal_code: Optional[str] = None
+    country: Optional[str] = None           # co
+
+    # ---- Organization ----
     title: Optional[str] = None
     department: Optional[str] = None
     company: Optional[str] = None
     manager_dn: Optional[str] = None
-    manager_display_name: Optional[str] = None  # resolved from manager_dn
-    member_of: list[str] = Field(default_factory=list)  # group display names
-    account_expires: Optional[str] = None  # ISO 8601 or "Never"
-    pwd_last_set: Optional[str] = None  # ISO 8601
-    lockout_time: Optional[str] = None  # ISO 8601 or None
+    manager_display_name: Optional[str] = None
+    direct_reports: list[UserRef] = Field(default_factory=list)
+
+    # ---- Membership ----
+    member_of: list[GroupRef] = Field(default_factory=list)
+    primary_group_id: Optional[int] = None  # RID; 513 = Domain Users
+
+    # ---- Account status & UAC ----
+    account_status: str = "Enabled"         # "Enabled" | "Disabled" | "Locked Out"
+    uac_raw: Optional[int] = None
+    uac_flags: dict[str, bool] = Field(default_factory=dict)
+    must_change_password: bool = False      # pwdLastSet == 0
+
+    # ---- Account dates ----
+    account_expires: Optional[str] = None   # ISO 8601 or "Never"
+    pwd_last_set: Optional[str] = None      # ISO 8601
+    lockout_time: Optional[str] = None      # ISO 8601 when locked
     bad_pwd_count: Optional[int] = None
-    account_status: str = "Enabled"  # "Enabled" | "Disabled" | "Locked Out"
-    when_created: Optional[str] = None  # ISO 8601
-    when_changed: Optional[str] = None  # ISO 8601
+    bad_password_time: Optional[str] = None # ISO 8601
+    last_logon: Optional[str] = None        # lastLogonTimestamp (replicated, ~14d lag)
+    logon_count: Optional[int] = None
+
+    # ---- Profile ----
+    profile_path: Optional[str] = None
+    logon_script: Optional[str] = None      # scriptPath
+    home_directory: Optional[str] = None
+    home_drive: Optional[str] = None
+
+    # ---- Object metadata (Advanced Features) ----
+    object_sid: Optional[str] = None
+    object_guid: Optional[str] = None
+    usn_created: Optional[int] = None
+    usn_changed: Optional[int] = None
+    when_created: Optional[str] = None      # ISO 8601
+    when_changed: Optional[str] = None      # ISO 8601
+
+    # ---- Attribute Editor ----
+    # All LDAP attributes serialized to strings, sorted by name.
+    raw_attributes: dict[str, Any] = Field(default_factory=dict)

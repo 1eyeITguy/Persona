@@ -7,13 +7,14 @@ import { useADTree } from '../hooks/useADTree.js'
 // TreeNode — a single row in the directory tree
 // ---------------------------------------------------------------------------
 
-function TreeNode({ node, depth, treeState, onUserSelect }) {
+function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
   const { nodeMap, loadingSet, errorMap, expandedSet, toggleExpand } = treeState
-  const isUser = node.type === 'user'
+  const isUser     = node.type === 'user'
   const isExpanded = expandedSet.has(node.dn)
-  const isLoading = loadingSet.has(node.dn)
-  const error = errorMap[node.dn]
-  const children = nodeMap[node.dn]
+  const isLoading  = loadingSet.has(node.dn)
+  const isSelected = isUser && node.dn === selectedDn
+  const error      = errorMap[node.dn]
+  const children   = nodeMap[node.dn]
 
   function handleClick() {
     if (isUser) {
@@ -28,15 +29,21 @@ function TreeNode({ node, depth, treeState, onUserSelect }) {
       {/* Row */}
       <div
         style={{ paddingLeft: `${depth}rem` }}
-        className="flex cursor-pointer select-none items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-white/5"
         onClick={handleClick}
+        className={`flex cursor-pointer select-none items-center gap-1.5 rounded-md px-2 py-1 transition-colors ${
+          isSelected
+            ? 'bg-brand-primary/20 text-brand-primary'
+            : 'hover:bg-white/5'
+        }`}
       >
         {/* Chevron — only for containers/OUs with children */}
         {!isUser ? (
           <ChevronRight
-            className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform duration-200 ${
-              isExpanded ? 'rotate-90' : ''
-            } ${!node.has_children ? 'opacity-0 pointer-events-none' : ''}`}
+            className={`h-3.5 w-3.5 shrink-0 transition-transform duration-200 ${
+              isSelected ? 'text-brand-primary' : 'text-slate-500'
+            } ${isExpanded ? 'rotate-90' : ''} ${
+              !node.has_children ? 'pointer-events-none opacity-0' : ''
+            }`}
           />
         ) : (
           <span className="inline-block h-3.5 w-3.5 shrink-0" />
@@ -46,7 +53,9 @@ function TreeNode({ node, depth, treeState, onUserSelect }) {
         {isLoading ? (
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-brand-primary" />
         ) : isUser ? (
-          <User className="h-4 w-4 shrink-0 text-slate-400" />
+          <User
+            className={`h-4 w-4 shrink-0 ${isSelected ? 'text-brand-primary' : 'text-slate-400'}`}
+          />
         ) : (
           <Folder
             className={`h-4 w-4 shrink-0 transition-colors ${
@@ -58,7 +67,9 @@ function TreeNode({ node, depth, treeState, onUserSelect }) {
         {/* Label */}
         <span
           className={`truncate text-sm ${
-            isUser
+            isSelected
+              ? 'font-medium text-brand-primary'
+              : isUser
               ? 'text-slate-300 hover:text-white'
               : 'font-medium text-slate-200'
           }`}
@@ -87,6 +98,7 @@ function TreeNode({ node, depth, treeState, onUserSelect }) {
             depth={depth + 1}
             treeState={treeState}
             onUserSelect={onUserSelect}
+            selectedDn={selectedDn}
           />
         ))}
     </div>
@@ -97,7 +109,7 @@ function TreeNode({ node, depth, treeState, onUserSelect }) {
 // ADTree — root component
 // ---------------------------------------------------------------------------
 
-export default function ADTree({ onUserSelect }) {
+export default function ADTree({ onUserSelect, selectedDn }) {
   const { getToken } = useAuth()
   const treeState = useADTree(getToken)
   const { nodeMap, loadingSet, errorMap, rootDn, fetchRoot } = treeState
@@ -107,8 +119,8 @@ export default function ADTree({ onUserSelect }) {
   useEffect(() => { fetchRoot() }, [])
 
   const isRootLoading = loadingSet.has('__root__')
-  const rootError = errorMap.__root__
-  const rootChildren = rootDn ? nodeMap[rootDn] : null
+  const rootError     = errorMap.__root__
+  const rootChildren  = rootDn ? nodeMap[rootDn] : null
 
   if (isRootLoading) {
     return (
@@ -139,6 +151,7 @@ export default function ADTree({ onUserSelect }) {
           depth={1}
           treeState={treeState}
           onUserSelect={onUserSelect}
+          selectedDn={selectedDn}
         />
       ))}
     </div>

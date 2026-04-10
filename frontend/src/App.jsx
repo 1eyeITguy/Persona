@@ -6,7 +6,7 @@ import { useAppConfig } from './hooks/useAppConfig.js'
 import SetupWizard from './components/SetupWizard.jsx'
 import LoginForm from './components/LoginForm.jsx'
 import ADTree from './components/ADTree.jsx'
-import UserPanel from './components/UserPanel.jsx'
+import UserDetail from './components/UserDetail.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
 
 // ---------------------------------------------------------------------------
@@ -129,19 +129,27 @@ function DirectoryPage() {
 
   return (
     <div className="flex h-full overflow-hidden">
-      {/* Tree panel — scrollable */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+      {/* Tree panel — narrows when a user is selected */}
+      <div
+        className={`flex flex-col overflow-y-auto border-r border-border-subtle transition-[width] duration-200 ${
+          selectedUserDn ? 'w-64 shrink-0' : 'flex-1'
+        }`}
+      >
         <div className="border-b border-border-subtle px-4 py-3">
           <h2 className="text-sm font-medium text-slate-300">Active Directory</h2>
         </div>
-        <ADTree onUserSelect={setSelectedUserDn} />
+        <ADTree
+          onUserSelect={setSelectedUserDn}
+          selectedDn={selectedUserDn}
+        />
       </div>
 
-      {/* User attribute panel — slides in alongside tree */}
+      {/* Full user detail — fills remaining space */}
       {selectedUserDn && (
-        <UserPanel
+        <UserDetail
           userDn={selectedUserDn}
           onClose={() => setSelectedUserDn(null)}
+          onUserSelect={setSelectedUserDn}
         />
       )}
     </div>

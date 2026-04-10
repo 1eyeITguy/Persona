@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from passlib.context import CryptContext
 from starlette.concurrency import run_in_threadpool
 
-from backend.app_config import get_local_admin, is_setup_complete, load_config
+from backend.app_config import load_config
 from backend.auth.ldap import authenticate_user
 from backend.deps import create_access_token, require_jwt
 from backend.models.schemas import LoginRequest, TokenResponse, UserInfo

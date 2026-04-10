@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m vulture backend/ --min-confidence 80)",
+      "Bash(npm run:*)",
+      "Bash(python -m py_compile backend/models/schemas.py backend/auth/ldap.py backend/routes/settings.py)"
+    ]
+  }
+}

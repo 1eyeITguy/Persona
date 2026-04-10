@@ -315,6 +315,7 @@ export default function SettingsPage() {
     use_ssl: false,
     base_dn: '',
     service_account_dn: '',
+    allowed_group_dn: '',
   })
   // Track whether the user has typed a new password.
   // When false we send null to the backend (keep existing).
@@ -528,6 +529,25 @@ export default function SettingsPage() {
             {passwordEditing
               ? 'Type a new password, then test and save.'
               : 'Click to change the password. Leave unchanged to keep the current one.'}
+          </p>
+        </div>
+
+        {/* Login group restriction */}
+        <div>
+          <label className={labelCls}>
+            Login group restriction{' '}
+            <span className="font-normal text-slate-500">(optional)</span>
+          </label>
+          <input
+            value={form.allowed_group_dn}
+            onChange={e => handleChange('allowed_group_dn', e.target.value)}
+            className={inputCls}
+            placeholder="CN=Persona-Users,OU=Security Groups,DC=yourdomain,DC=com"
+            spellCheck={false}
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            When set, only members of this group (including nested members) can
+            log in. Leave blank to allow all AD users.
           </p>
         </div>
 

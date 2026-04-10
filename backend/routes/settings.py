@@ -244,6 +244,7 @@ async def get_ldap_config(
         "base_dn": cfg.base_dn,
         "service_account_dn": cfg.service_account_dn,
         "service_account_password": "\u2022" * 8,
+        "allowed_group_dn": cfg.allowed_group_dn or "",
     }
 
 
@@ -278,6 +279,7 @@ async def update_ldap_config(
         base_dn=request.base_dn,
         service_account_dn=request.service_account_dn,
         service_account_password=password,
+        allowed_group_dn=request.allowed_group_dn or None,
     )
 
     test_result = await run_in_threadpool(test_ldap_connection, full_settings)
@@ -295,6 +297,9 @@ async def update_ldap_config(
         "base_dn": full_settings.base_dn,
         "service_account_dn": full_settings.service_account_dn,
         "service_account_password": full_settings.service_account_password,
+        # Store None (absent key) when the field is blank so that
+        # authenticate_user() can use a simple truthiness check.
+        "allowed_group_dn": request.allowed_group_dn or None,
     }
     config["ldap_configured"] = True
     save_config(config)

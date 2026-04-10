@@ -78,24 +78,6 @@ def get_ldap_settings():
     return LDAPSettings(**ldap_data)
 
 
-def get_local_admin():
-    """
-    Return a typed LocalAdmin object from config.json, or None if the
-    local admin account has not been created yet.
-
-    Import is deferred to avoid a circular dependency at module load time.
-    """
-    from backend.models.schemas import LocalAdmin  # noqa: PLC0415
-
-    config = load_config()
-    if not config.get("local_admin_created", False):
-        return None
-    admin_data = config.get("local_admin")
-    if not admin_data:
-        return None
-    return LocalAdmin(**admin_data)
-
-
 def get_entra_settings() -> dict | None:
     """
     Return the entra section from config.json as a dict, or None if Entra
