@@ -499,7 +499,7 @@ export default function UserDetail({ userDn, onClose, onUserSelect }) {
           </div>
 
           {/* ── Tab bar ── */}
-          <div className="flex shrink-0 overflow-x-auto overflow-y-hidden border-b border-border-subtle">
+          <div className="flex shrink-0 overflow-x-auto overflow-y-hidden border-b border-border-subtle scrollbar-none">
             {TABS.map(tab => (
               <button
                 key={tab.id}
