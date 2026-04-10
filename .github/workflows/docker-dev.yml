@@ -3,7 +3,7 @@ name: Build Dev Image
 on:
   push:
     branches:
-      - develop
+      - dev
   workflow_dispatch:
 
 env:
