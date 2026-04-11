@@ -680,15 +680,15 @@ $cert = New-SelfSignedCertificate \`
   -HashAlgorithm SHA256 \`
   -NotAfter (Get-Date).AddYears(2)
 
-# Export PFX — upload this to Persona below
+# Export PFX to current directory — upload this to Persona below
 $pw = ConvertTo-SecureString "YourPFXPassword" -AsPlainText -Force
 Export-PfxCertificate -Cert $cert \`
-  -FilePath "$env:USERPROFILE\\Desktop\\persona-exchange.pfx" \`
+  -FilePath ".\\persona-exchange.pfx" \`
   -Password $pw
 
-# Export CER — upload this to Azure in Step 2
+# Export CER to current directory — upload this to Azure in Step 2
 Export-Certificate -Cert $cert \`
-  -FilePath "$env:USERPROFILE\\Desktop\\persona-exchange.cer"`}</pre>
+  -FilePath ".\\persona-exchange.cer"`}</pre>
             </div>
 
             {/* Step 2: Upload to Azure */}
@@ -704,11 +704,20 @@ Export-Certificate -Cert $cert \`
 
             {/* Step 3: Object ID */}
             <div>
-              <p className="font-semibold text-slate-300 mb-1">Step 3 — Get the app's Object ID</p>
-              <p>On the app registration <strong className="text-slate-300">Overview</strong> page in Entra, copy the <strong className="text-slate-300">Object ID</strong>. This is different from the Application (client) ID — you need both for the next step.</p>
-              <div className="mt-2 rounded bg-black/30 px-3 py-2 font-mono text-slate-400">
-                Application (client) ID → used as <span className="text-brand-primary">-AppId</span> and in the form below<br/>
-                Object ID → used as <span className="text-brand-primary">-ServiceId</span> (Step 4 only)
+              <p className="font-semibold text-slate-300 mb-1">Step 3 — Get the service principal's Object ID</p>
+              <p className="mb-2">
+                The <span className="font-mono">-ServiceId</span> parameter requires the Object ID from{' '}
+                <strong className="text-slate-300">Enterprise Applications</strong>, not from App Registrations.
+                These are two different object IDs — using the wrong one will cause the command to fail.
+              </p>
+              <ol className="list-decimal ml-4 space-y-1 mb-2">
+                <li>Azure Portal → <strong className="text-slate-300">Entra ID → Enterprise Applications</strong></li>
+                <li>Search for your app name (e.g. <em>Persona</em>)</li>
+                <li>Open it and copy the <strong className="text-slate-300">Object ID</strong> shown on the Overview page</li>
+              </ol>
+              <div className="rounded bg-black/30 px-3 py-2 font-mono text-slate-400 space-y-0.5">
+                <div>App Registrations → <span className="text-slate-500">Application (client) ID</span> → used as <span className="text-brand-primary">-AppId</span> and in the form below</div>
+                <div>Enterprise Applications → <span className="text-slate-500">Object ID</span> → used as <span className="text-brand-primary">-ServiceId</span> in Step 4 only</div>
               </div>
             </div>
 
@@ -719,12 +728,12 @@ Export-Certificate -Cert $cert \`
               <pre className="bg-black/40 rounded p-3 font-mono text-slate-300 overflow-x-auto whitespace-pre leading-relaxed">{`# Install the module if you haven't already
 Install-Module -Name ExchangeOnlineManagement -Force -Scope CurrentUser
 
-# Connect (sign in with your admin account)
+# Connect (sign in with your Exchange/Global admin account)
 Connect-ExchangeOnline
 
 # Replace with your actual values from Entra
-$clientId  = "<Application (client) ID>"   # from app Overview
-$objectId  = "<Object ID>"                  # from app Overview (NOT client ID)
+$clientId  = "<Application (client) ID>"   # App Registrations → Overview
+$objectId  = "<Object ID>"                  # Enterprise Applications → Overview (NOT the same as above)
 
 # Register the app as a service principal in Exchange Online
 $sp = New-ServicePrincipal \`
@@ -732,14 +741,28 @@ $sp = New-ServicePrincipal \`
   -ServiceId $objectId \`
   -DisplayName "Persona"
 
-# Grant read-only access to recipients and mailboxes
+# Grant Mail Recipients role
+# This covers: read + write on email addresses, aliases, OOO, forwarding,
+# and distribution group management. Persona currently only reads, but this
+# avoids re-running setup when write operations are added later.
 New-ManagementRoleAssignment \`
-  -Role "View-Only Recipients" \`
+  -Role "Mail Recipients" \`
   -App $sp.Identity
 
 # Disconnect when done
 Disconnect-ExchangeOnline -Confirm:$false`}</pre>
-              <p className="mt-2 text-slate-500">Role assignment replication in Exchange Online can take <strong className="text-slate-400">5–15 minutes</strong>. If the connection test fails immediately, wait a few minutes and try again.</p>
+              <p className="mt-2 text-slate-500">
+                <strong className="text-slate-400">Note:</strong> Role assignment replication in Exchange Online
+                can take <strong className="text-slate-400">5–15 minutes</strong>. If the connection test below
+                fails immediately after setup, wait a few minutes and try again.
+              </p>
+              <p className="mt-1 text-slate-500">
+                <strong className="text-slate-400">Why Mail Recipients and not Recipient Management?</strong>{' '}
+                <span className="font-mono">Recipient Management</span> is a role <em>group</em> in Exchange Online —
+                it cannot be directly assigned to an app service principal.{' '}
+                <span className="font-mono">Mail Recipients</span> is the individual management role that covers
+                everything Persona needs.
+              </p>
             </div>
 
             {/* Step 5 */}

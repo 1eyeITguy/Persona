@@ -714,29 +714,33 @@ function StepExchangePS({ onSave, onSkip }) {
   -HashAlgorithm SHA256 \\
   -NotAfter (Get-Date).AddYears(2)
 
-# Export PFX (set a password)
+# Export PFX to current directory (set a password)
+$pw = ConvertTo-SecureString "YourPFXPassword" -AsPlainText -Force
 Export-PfxCertificate -Cert $cert \\
-  -FilePath C:\\persona-exchange.pfx \\
-  -Password (ConvertTo-SecureString "YourPassword" -AsPlainText -Force)
+  -FilePath .\\persona-exchange.pfx \\
+  -Password $pw
 
 # Export CER for upload to Azure
-Export-Certificate -Cert $cert -FilePath C:\\persona-exchange.cer`}</pre>
+Export-Certificate -Cert $cert -FilePath .\\persona-exchange.cer`}</pre>
 
             <p className="font-medium text-slate-300 pt-1">2 — Grant the service principal Exchange access</p>
             <p>Run these commands in <strong className="text-slate-300">Exchange Online PowerShell</strong> as an Exchange admin:</p>
-            <pre className="bg-black/30 rounded p-2 text-xs font-mono text-slate-300 overflow-x-auto whitespace-pre-wrap">{`# Find your app's Object ID in Entra (not the Client ID)
-$objectId = "<Entra App Object ID>"
-$clientId  = "<Application (client) ID>"
+            <pre className="bg-black/30 rounded p-2 text-xs font-mono text-slate-300 overflow-x-auto whitespace-pre-wrap">{`# App Registrations → Overview → Application (client) ID
+$clientId = "<Application (client) ID>"
+
+# Enterprise Applications → Overview → Object ID  (different from above!)
+$objectId = "<Service Principal Object ID>"
 
 $sp = New-ServicePrincipal \\
   -AppId $clientId \\
   -ServiceId $objectId \\
   -DisplayName "Persona"
 
+# Mail Recipients covers read + write on addresses, OOO, and groups
 New-ManagementRoleAssignment \\
-  -Role "View-Only Recipients" \\
+  -Role "Mail Recipients" \\
   -App $sp.Identity`}</pre>
-            <p>After granting the role, Exchange Online replication may take a few minutes before the connection test succeeds.</p>
+            <p>After granting the role, Exchange Online replication may take <strong className="text-slate-300">5–15 minutes</strong> — wait before running the connection test.</p>
           </div>
         )}
       </div>
