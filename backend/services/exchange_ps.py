@@ -80,7 +80,7 @@ def _connect_snippet(app_id: str, cert_path: str, tenant_domain: str, cert_passw
     lines = [
         f"Connect-ExchangeOnline",
         f"  -AppId '{app_id}'",
-        f"  -CertificatePath '{cert_path}'",
+        f"  -CertificateFilePath '{cert_path}'",
         f"  -Organization '{tenant_domain}'",
         f"  -ShowBanner:$false",
         f"  -ErrorAction Stop",
