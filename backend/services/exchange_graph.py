@@ -20,8 +20,7 @@ import requests as _requests
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_BASE      = "https://graph.microsoft.com/v1.0"
-_GRAPH_BASE_BETA = "https://graph.microsoft.com/beta"
+_GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 
 def _acquire_token(tenant_id: str, client_id: str, client_secret: str) -> Optional[str]:
@@ -140,23 +139,11 @@ def get_exchange_mailbox_data(
     except Exception as exc:
         logger.warning("Exchange mailboxSettings fetch failed for %s: %s", user_id, exc)
 
-    # ── 3. Mailbox size (requires Mail.Read) ───────────────────────────────────
-    # sizeInBytes is only available on the beta mailFolders endpoint, not v1.0.
-    # We use beta exclusively for this one call; the same auth token works.
-    try:
-        r = _requests.get(
-            f"{_GRAPH_BASE_BETA}/users/{user_id}/mailFolders",
-            headers=headers,
-            params={"$select": "sizeInBytes", "$top": "50"},
-            timeout=15,
-        )
-        if r.ok:
-            folders = r.json().get("value", [])
-            total = sum(f.get("sizeInBytes") or 0 for f in folders)
-            if total > 0:
-                result["mailbox_size_bytes"] = total
-    except Exception as exc:
-        logger.warning("Exchange mailbox size fetch failed for %s: %s", user_id, exc)
+    # ── 3. Mailbox size ─────────────────────────────────────────────────────────
+    # Graph API does not reliably expose per-user mailbox size in app-only context.
+    # Size is populated by get_mailbox_size_ps() in exchange_ps.py via
+    # Get-MailboxStatistics when EXO PowerShell is configured.
+    # result["mailbox_size_bytes"] remains None until then.
 
     # ── 4. Archive folder size ────────────────────────────────────────────────
     if result["archive_enabled"]:

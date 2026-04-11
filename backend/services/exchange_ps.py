@@ -231,6 +231,39 @@ try {{
         return []
 
 
+def get_mailbox_size_ps(
+    app_id: str,
+    cert_path: str,
+    tenant_domain: str,
+    upn: str,
+    cert_password: Optional[str] = None,
+) -> Optional[int]:
+    """
+    Return the total mailbox size in bytes for the given UPN via Get-MailboxStatistics.
+    Returns None if EXO PS is unavailable or the call fails.
+    Caller MUST use run_in_threadpool.
+    """
+    safe_upn = upn.replace("'", "''")
+    script = f"""
+Import-Module ExchangeOnlineManagement -ErrorAction Stop
+{_connect_snippet(app_id, cert_path, tenant_domain, cert_password)}
+try {{
+    $stats = Get-MailboxStatistics -Identity '{safe_upn}' -ErrorAction Stop
+    $size  = $stats.TotalItemSize.Value.ToBytes()
+    $size | ConvertTo-Json
+}} finally {{
+    {_disconnect_snippet()}
+}}
+"""
+    output, _ = _run_ps(script, timeout=60)
+    if not output:
+        return None
+    try:
+        return int(json.loads(output))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
 def test_ewo_connection(
     app_id: str,
     cert_path: str,
@@ -261,8 +294,13 @@ try {{
     error_detail = ""
     if stderr:
         clean = _ANSI_RE.sub("", stderr).strip()
-        # Grab up to 3 non-empty lines — enough to see the real message without the full stack
-        useful = [l.strip() for l in clean.splitlines() if l.strip()][:3]
+        # PowerShell error output contains location indicator lines starting with '|'
+        # (e.g. "| Line |", "|    5 |", "| ~~~ |") before the actual message.
+        # Skip those and show up to 3 lines of real error text.
+        useful = [
+            l.strip() for l in clean.splitlines()
+            if l.strip() and not l.strip().startswith("|")
+        ][:3]
         if useful:
             error_detail = " PowerShell error: " + " | ".join(useful)
 

@@ -24,7 +24,7 @@ from backend.auth.ldap import get_exchange_attrs_by_upn
 from backend.deps import require_jwt
 from backend.models.schemas import ExchangeMailboxResponse, ProxyAddress, SharedMailboxAccess
 from backend.services.exchange_graph import get_exchange_mailbox_data
-from backend.services.exchange_ps import get_org_block_flag, get_shared_mailbox_access
+from backend.services.exchange_ps import get_mailbox_size_ps, get_org_block_flag, get_shared_mailbox_access
 from backend.services.exchange_soa import ExchangeSOA, resolve_exchange_soa
 
 logger = logging.getLogger(__name__)
@@ -144,11 +144,20 @@ async def get_user_mailbox(
                 primary_email = pa.address
                 break
 
-    # ── Step 6: Get shared mailbox access via EXO PowerShell ──────────────────
+    # ── Step 6: EXO PowerShell — mailbox size + shared mailbox access ────────
+    mailbox_size_bytes: int | None = None
     shared_access: list[SharedMailboxAccess] = []
     if is_exchange_ps_configured():
         ps_cfg = get_exchange_ps_config()
         if ps_cfg:
+            mailbox_size_bytes = await run_in_threadpool(
+                get_mailbox_size_ps,
+                ps_cfg["app_id"],
+                ps_cfg.get("cert_path", ""),
+                ps_cfg["tenant_domain"],
+                upn,
+                ps_cfg.get("cert_password"),
+            )
             raw_shared = await run_in_threadpool(
                 get_shared_mailbox_access,
                 ps_cfg["app_id"],
@@ -173,7 +182,7 @@ async def get_user_mailbox(
         primary_email=primary_email,
         display_name=graph_data.get("display_name"),
         proxy_addresses=proxy_addresses,
-        mailbox_size_bytes=graph_data.get("mailbox_size_bytes"),
+        mailbox_size_bytes=mailbox_size_bytes,
         archive_enabled=graph_data.get("archive_enabled"),
         ooo_enabled=graph_data.get("ooo_enabled"),
         ooo_message=graph_data.get("ooo_external_message"),
