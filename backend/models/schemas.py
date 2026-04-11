@@ -94,6 +94,7 @@ class SettingsStatusResponse(BaseModel):
     site_name: str = "Persona"
     entra_configured: bool = False
     entra_secret_expires: Optional[str] = None
+    entra_bootstrap_client_id: str = ""
 
 
 class TestConnectionRequest(BaseModel):
@@ -199,9 +200,9 @@ class EntraConfigResponse(BaseModel):
 class OAuthStartRequest(BaseModel):
     """Sent by the frontend to begin the OAuth2 Authorization Code + PKCE flow."""
 
-    tenant_id: str
-    client_id: str    # bootstrap public client app ID registered by the admin
-    redirect_uri: str  # e.g. "http://localhost:5173/entra-callback"
+    tenant_id: str = ""  # optional — /organizations used when empty
+    client_id: str       # bootstrap public client app ID
+    redirect_uri: str    # e.g. "http://localhost:5173/entra-callback"
 
 
 class OAuthStartResponse(BaseModel):

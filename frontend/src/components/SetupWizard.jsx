@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { Shield, CheckCircle, Eye, EyeOff, Loader2, ExternalLink, ChevronRight } from 'lucide-react'
+import { useAppConfig } from '../hooks/useAppConfig.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -590,10 +591,9 @@ function ManualEntraForm({ onSave, onBack }) {
  * session_token left by the /entra-callback page. If found, it skips
  * straight to the "creating" phase.
  */
-function AutoEntraSetup({ onSave, onBack, storedLdapData }) {
+function AutoEntraSetup({ onSave, onBack, storedLdapData, bootstrapClientId: presetClientId }) {
   const [phase, setPhase] = useState('bootstrap')
-  const [tenantId, setTenantId] = useState('')
-  const [bootstrapClientId, setBootstrapClientId] = useState('')
+  const [customClientId, setCustomClientId] = useState('')
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
   const [createdClientId, setCreatedClientId] = useState(null)
@@ -609,7 +609,8 @@ function AutoEntraSetup({ onSave, onBack, storedLdapData }) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleSignIn() {
-    if (!tenantId.trim() || !bootstrapClientId.trim()) return
+    const clientId = presetClientId || customClientId.trim()
+    if (!clientId) return
     setLoading(true)
     setErrorMsg('')
 
@@ -621,8 +622,7 @@ function AutoEntraSetup({ onSave, onBack, storedLdapData }) {
     try {
       const redirectUri = `${window.location.origin}/entra-callback`
       const res = await axios.post('/api/v1/entra/oauth2/start', {
-        tenant_id: tenantId.trim(),
-        client_id: bootstrapClientId.trim(),
+        client_id: clientId,
         redirect_uri: redirectUri,
       })
       // Redirect browser to Microsoft login
@@ -668,6 +668,33 @@ function AutoEntraSetup({ onSave, onBack, storedLdapData }) {
   const redirectUri = `${window.location.origin}/entra-callback`
 
   if (phase === 'bootstrap') {
+    // When a preset bootstrap client ID exists, show a simple one-click button
+    if (presetClientId) {
+      return (
+        <div className="space-y-4">
+          <button
+            onClick={onBack}
+            className="text-xs text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
+          >
+            ← Back
+          </button>
+
+          <p className="text-sm text-slate-400">
+            Click below to sign in as a Global Administrator. Persona will create the App Registration automatically.
+          </p>
+
+          {errorMsg && (
+            <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{errorMsg}</p>
+          )}
+
+          <Button onClick={handleSignIn} loading={loading}>
+            Sign in with Microsoft →
+          </Button>
+        </div>
+      )
+    }
+
+    // No preset — user must provide their own bootstrap client ID
     return (
       <div className="space-y-4">
         <button
@@ -678,43 +705,32 @@ function AutoEntraSetup({ onSave, onBack, storedLdapData }) {
         </button>
 
         <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 text-xs text-slate-400 space-y-2">
-          <p className="font-medium text-slate-300">Before you begin — one-time prerequisite:</p>
+          <p className="font-medium text-slate-300">One-time prerequisite:</p>
           <p>
-            Create a simple <strong className="text-slate-300">public client</strong> App Registration
-            in your Azure Portal (no secret needed):
+            Create a minimal App Registration in Azure Portal (no permissions or secrets needed):
           </p>
           <ol className="list-decimal list-inside space-y-1 pl-1">
             <li>Azure Portal → Entra ID → App Registrations → New Registration</li>
-            <li>Single tenant, any name (e.g. "Persona Bootstrap")</li>
+            <li>Any name (e.g. "Persona Bootstrap"), single tenant</li>
             <li>Add redirect URI (Web):{' '}
               <code className="font-mono text-brand-primary break-all">{redirectUri}</code>
             </li>
-            <li>Add delegated permissions: <em>Application.ReadWrite.All</em>, <em>AppRoleAssignment.ReadWrite.All</em></li>
           </ol>
           <p className="text-slate-500 text-xs">
-            This bootstrap app is only needed once. Persona creates and uses its own App Registration after this step.
+            That's it — just a name and a redirect URI. Persona handles permissions during sign-in.
           </p>
         </div>
 
         <div>
-          <Label htmlFor="auto_tid">Entra Tenant ID</Label>
-          <Input
-            id="auto_tid"
-            value={tenantId}
-            onChange={(e) => setTenantId(e.target.value)}
-            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-          />
-        </div>
-        <div>
           <Label htmlFor="auto_bcid">Bootstrap App Client ID</Label>
           <Input
             id="auto_bcid"
-            value={bootstrapClientId}
-            onChange={(e) => setBootstrapClientId(e.target.value)}
+            value={customClientId}
+            onChange={(e) => setCustomClientId(e.target.value)}
             placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
           />
           <p className="mt-1 text-xs text-slate-500">
-            The Client ID of the bootstrap App Registration you just created.
+            Copy the Application (client) ID from the app you just created.
           </p>
         </div>
 
@@ -725,7 +741,7 @@ function AutoEntraSetup({ onSave, onBack, storedLdapData }) {
         <Button
           onClick={handleSignIn}
           loading={loading}
-          disabled={!tenantId.trim() || !bootstrapClientId.trim()}
+          disabled={!customClientId.trim()}
         >
           Sign in with Microsoft →
         </Button>
@@ -791,7 +807,7 @@ function AutoEntraSetup({ onSave, onBack, storedLdapData }) {
 
 // ── StepEntra: mode selector ──────────────────────────────────────────────
 
-function StepEntra({ onSave, onSkip, initialMode, ldapData }) {
+function StepEntra({ onSave, onSkip, initialMode, ldapData, bootstrapClientId }) {
   // mode: 'choose' | 'manual' | 'auto'
   const [mode, setMode] = useState(initialMode || 'choose')
 
@@ -809,6 +825,7 @@ function StepEntra({ onSave, onSkip, initialMode, ldapData }) {
           onSave={onSave}
           onBack={() => setMode('choose')}
           storedLdapData={ldapData}
+          bootstrapClientId={bootstrapClientId}
         />
         <button
           onClick={onSkip}
@@ -871,9 +888,13 @@ function StepEntra({ onSave, onSkip, initialMode, ldapData }) {
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-white">Set up automatically</p>
+              <p className="text-sm font-medium text-white">
+                {bootstrapClientId ? 'Sign in with Microsoft' : 'Set up automatically'}
+              </p>
               <p className="text-xs text-slate-400 mt-0.5">
-                Sign in as Global Admin — Persona creates the App Registration for you.
+                {bootstrapClientId
+                  ? 'Sign in as Global Admin — Persona creates the App Registration for you.'
+                  : 'Sign in as Global Admin — requires a one-time redirect URI setup.'}
               </p>
             </div>
             <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-slate-300 shrink-0" />
@@ -1014,6 +1035,8 @@ export default function SetupWizard() {
   const [step, setStep] = useState(1)
   const [ldapData, setLdapData] = useState(DEFAULT_LDAP)
   const [entraCreds, setEntraCreds] = useState(undefined) // undefined = not yet decided
+  const { status } = useAppConfig()
+  const bootstrapClientId = status?.entra_bootstrap_client_id || ''
 
   // On mount: detect return from OAuth redirect.
   // Restore LDAP data that was stored before the redirect, and jump to step 4
@@ -1059,6 +1082,7 @@ export default function SetupWizard() {
             <StepEntra
               initialMode={isReturningFromOAuth ? 'auto' : undefined}
               ldapData={ldapData}
+              bootstrapClientId={bootstrapClientId}
               onSave={(creds) => { setEntraCreds(creds); setStep(5) }}
               onSkip={() => { setEntraCreds(false); setStep(5) }}
             />

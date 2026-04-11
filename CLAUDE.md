@@ -153,12 +153,6 @@ Vite injects it at build time as `__APP_VERSION__` (defined in `vite.config.js`)
 
 **The only rule:** when you merge `dev` → `main` for a release, edit `frontend/package.json`, change `"0.3.0-alpha"` to `"0.3.0"`, commit, then tag. That's it — never touch the version between releases.
 
-**Changelog hook:** `.githooks/pre-commit` reminds you to update `CHANGELOG.md` when source files change. Enable once per clone:
-
-```bash
-git config core.hooksPath .githooks
-```
-
 ## Git & Release Workflow
 
 ```bash

@@ -5,11 +5,31 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
+## [0.3.1-alpha] — dev branch (Phase 2 in progress)
+
+### Fixed
+- **Entra auto-setup "Sign-in failed, not authenticated"** — OAuth2 exchange endpoint no longer
+  requires JWT; PKCE + state provide sufficient security, and JWT is unavailable after a full-page
+  redirect to Microsoft login.
+- **"Go back" after Entra sign-in failure** — error page now navigates to the originating page
+  (Settings or Setup Wizard) instead of always going to `/`.
+
+### Changed
+- **Entra auto setup overhauled** — eliminated manual permission configuration and Tenant ID input:
+  - Permissions (`Application.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`) are now requested
+    dynamically via OAuth scopes — no need to add them in Azure Portal
+  - Tenant ID is auto-detected from the sign-in response (uses `/organizations` endpoint)
+  - Fallback guide reduced to 3 Azure Portal steps (name + redirect URI + copy Client ID)
+  - OAuth prompt changed to `consent` so admin consent is granted during sign-in
+- **`ENTRA_BOOTSTRAP_CLIENT_ID` env var** — when set, Entra setup becomes true one-click:
+  click "Sign in with Microsoft", authenticate as Global Admin, done. No Azure Portal steps.
+
+---
+
 ## [0.3.0-alpha] — dev branch (Phase 2 in progress)
 
 ### Added
 - Version number displayed on login page and sidebar (injected from package.json at build time)
-- `.githooks/pre-commit` — shared changelog reminder hook (enable with `git config core.hooksPath .githooks`)
 
 ### Phase 2 — Entra Connect: Programmatic App Registration + Cloud Tab
 

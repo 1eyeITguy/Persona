@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import os
 import threading
@@ -218,12 +219,18 @@ def build_oauth_auth_url(
     """
     Build a Microsoft OAuth2 authorization URL with PKCE.
 
+    If *tenant_id* is empty, the ``/organizations`` common endpoint is used
+    so that the admin can sign in with any work account and the tenant is
+    auto-detected from the resulting token.
+
     Stores the PKCE verifier server-side, keyed by the state UUID.
     The caller should redirect the browser to the returned auth_url.
 
     Returns:
         {"success": bool, "auth_url": str, "state": str}
     """
+    authority_hint = tenant_id.strip() if tenant_id else "organizations"
+
     # Generate PKCE values
     code_verifier = (
         base64.urlsafe_b64encode(os.urandom(48)).rstrip(b"=").decode()
@@ -241,7 +248,7 @@ def build_oauth_auth_url(
         _OAUTH_SESSIONS[state] = {
             "type": "state",
             "code_verifier": code_verifier,
-            "tenant_id": tenant_id,
+            "authority_hint": authority_hint,
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "created_at": time.time(),
@@ -255,13 +262,31 @@ def build_oauth_auth_url(
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
-        "prompt": "select_account",
+        "prompt": "consent",
     }
     auth_url = (
-        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize"
+        f"https://login.microsoftonline.com/{authority_hint}/oauth2/v2.0/authorize"
         f"?{urlencode(params)}"
     )
     return {"success": True, "auth_url": auth_url}
+
+
+def _extract_tenant_id_from_token(access_token: str) -> str | None:
+    """
+    Decode the JWT payload (without signature verification — we trust the
+    token since it came from Microsoft's token endpoint over HTTPS) and
+    return the ``tid`` (tenant ID) claim.
+    """
+    try:
+        parts = access_token.split(".")
+        if len(parts) < 2:
+            return None
+        # JWT base64url padding
+        payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload.get("tid")
+    except Exception:
+        return None
 
 
 def exchange_oauth_code(code: str, state: str) -> dict:
@@ -269,6 +294,8 @@ def exchange_oauth_code(code: str, state: str) -> dict:
     Exchange an OAuth2 authorization code for an access token using PKCE.
 
     Consumes the stored state entry and creates a new session entry.
+    When the ``/organizations`` common endpoint was used, the real tenant ID
+    is extracted from the resulting access token.
 
     Returns:
         {"success": bool, "session_token": str | None, "message": str | None}
@@ -291,9 +318,11 @@ def exchange_oauth_code(code: str, state: str) -> dict:
             "message": "Authorization session expired. Please try again.",
         }
 
+    authority_hint = session.get("authority_hint") or session.get("tenant_id", "organizations")
+
     try:
         resp = _requests.post(
-            f"https://login.microsoftonline.com/{session['tenant_id']}/oauth2/v2.0/token",
+            f"https://login.microsoftonline.com/{authority_hint}/oauth2/v2.0/token",
             data={
                 "grant_type": "authorization_code",
                 "client_id": session["client_id"],
@@ -331,12 +360,28 @@ def exchange_oauth_code(code: str, state: str) -> dict:
         logger.warning("OAuth token exchange returned no access token: %s", err)
         return {"success": False, "session_token": None, "message": err}
 
+    access_token: str = token_data["access_token"]
+
+    # Resolve the real tenant ID — either from the stored state (if a
+    # specific tenant was provided) or by decoding the access token.
+    tenant_id = (
+        authority_hint
+        if authority_hint != "organizations"
+        else _extract_tenant_id_from_token(access_token)
+    )
+    if not tenant_id:
+        return {
+            "success": False,
+            "session_token": None,
+            "message": "Could not determine tenant ID from sign-in response.",
+        }
+
     session_token = str(uuid.uuid4())
     with _OAUTH_LOCK:
         _OAUTH_SESSIONS[session_token] = {
             "type": "session",
-            "access_token": token_data["access_token"],
-            "tenant_id": session["tenant_id"],
+            "access_token": access_token,
+            "tenant_id": tenant_id,
             "created_at": time.time(),
         }
 

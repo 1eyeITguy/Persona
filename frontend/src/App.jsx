@@ -91,10 +91,14 @@ function EntraCallbackPage() {
             <p className="text-sm font-medium text-danger mb-2">Sign-in failed</p>
             <p className="text-xs text-slate-400 mb-4">{errorMsg}</p>
             <button
-              onClick={() => window.location.replace('/')}
+              onClick={() => {
+                const redirect = sessionStorage.getItem('entra_callback_redirect') || '/'
+                sessionStorage.removeItem('entra_callback_redirect')
+                window.location.replace(redirect)
+              }}
               className="text-sm text-brand-primary hover:underline"
             >
-              Return to setup
+              Go back
             </button>
           </>
         )}

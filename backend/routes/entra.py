@@ -170,16 +170,16 @@ async def oauth_start(
 @router.post("/oauth2/exchange", response_model=OAuthExchangeResponse)
 async def oauth_exchange(
     request: OAuthExchangeRequest,
-    _token: object = Depends(optional_jwt),
 ) -> OAuthExchangeResponse:
     """
     Exchange an OAuth2 authorization code for a server-side session token.
     The delegated access token is stored server-side — never returned to the client.
 
-    Public when setup is incomplete; JWT required when setup is complete.
+    Always public — the OAuth2 authorization code + PKCE verifier + state
+    parameter provide the security.  JWT is unavailable here because the
+    browser just returned from a full-page redirect to Microsoft login,
+    which reloads the SPA and clears the in-memory token.
     """
-    if is_setup_complete() and _token is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
 
     result = await run_in_threadpool(exchange_oauth_code, request.code, request.state)
     return OAuthExchangeResponse(

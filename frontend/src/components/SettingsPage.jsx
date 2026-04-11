@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Loader2, ExternalLink, AlertTriangle, CheckCircle, ChevronRight } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
+import { useAppConfig } from '../hooks/useAppConfig.js'
 
 const REDACTED = '••••••••'
 
@@ -51,7 +52,7 @@ const REQUIRED_PERMISSIONS = [
   'AuditLog.Read.All',
 ]
 
-function EntraSection({ authHeaders }) {
+function EntraSection({ authHeaders, bootstrapClientId }) {
   const [config, setConfig] = useState(null)    // null = loading, false = not configured, obj = configured
   const [loading, setLoading] = useState(true)
   const [saveResult, setSaveResult] = useState(null)
@@ -62,7 +63,6 @@ function EntraSection({ authHeaders }) {
   // For 'auto': autoPhase: 'bootstrap' | 'creating' | 'done' | 'error'
   const [mode, setMode] = useState(null)
   const [autoPhase, setAutoPhase] = useState('bootstrap')
-  const [autoTenantId, setAutoTenantId] = useState('')
   const [autoClientId, setAutoClientId] = useState('')
   const [autoLoading, setAutoLoading] = useState(false)
   const [autoError, setAutoError] = useState('')
@@ -125,7 +125,8 @@ function EntraSection({ authHeaders }) {
   }
 
   async function handleAutoSignIn() {
-    if (!autoTenantId.trim() || !autoClientId.trim()) return
+    const clientId = bootstrapClientId || autoClientId.trim()
+    if (!clientId) return
     setAutoLoading(true)
     setAutoError('')
     try {
@@ -134,7 +135,7 @@ function EntraSection({ authHeaders }) {
       sessionStorage.setItem('entra_callback_redirect', '/settings')
       const res = await axios.post(
         '/api/v1/entra/oauth2/start',
-        { tenant_id: autoTenantId.trim(), client_id: autoClientId.trim(), redirect_uri: redirectUri },
+        { client_id: clientId, redirect_uri: redirectUri },
         { headers: authHeaders() },
       )
       window.location.href = res.data.auth_url
@@ -276,14 +277,20 @@ function EntraSection({ authHeaders }) {
             <p className="text-sm text-slate-400">How would you like to connect to Entra ID?</p>
             <div className="space-y-3">
               <button
-                onClick={() => setMode('auto')}
+                onClick={() => bootstrapClientId ? handleAutoSignIn() : setMode('auto')}
+                disabled={autoLoading}
                 className="w-full rounded-lg border-2 border-brand-primary/40 bg-brand-primary/10 hover:bg-brand-primary/20 hover:border-brand-primary/60 p-4 text-left transition-colors group"
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-white">Set up automatically</p>
+                    <p className="text-sm font-medium text-white flex items-center gap-2">
+                      {autoLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {bootstrapClientId ? 'Sign in with Microsoft' : 'Set up automatically'}
+                    </p>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Sign in as Global Admin — Persona creates the App Registration for you.
+                      {bootstrapClientId
+                        ? 'Sign in as Global Admin — Persona creates the App Registration for you.'
+                        : 'Sign in as Global Admin — requires a one-time redirect URI setup.'}
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-slate-300 shrink-0" />
@@ -304,6 +311,9 @@ function EntraSection({ authHeaders }) {
                 </div>
               </button>
             </div>
+            {autoError && (
+              <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{autoError}</p>
+            )}
             <button onClick={cancelConnect} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
               Cancel
             </button>
@@ -319,25 +329,15 @@ function EntraSection({ authHeaders }) {
 
             <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 text-xs text-slate-400 space-y-2">
               <p className="font-medium text-slate-300">One-time prerequisite:</p>
-              <p>Create a <strong className="text-slate-300">public client</strong> App Registration in Azure Portal (no secret needed):</p>
+              <p>Create a minimal App Registration in Azure Portal (no permissions or secrets needed):</p>
               <ol className="list-decimal list-inside space-y-1 pl-1">
                 <li>Azure Portal → Entra ID → App Registrations → New Registration</li>
-                <li>Single tenant, any name (e.g. "Persona Bootstrap")</li>
+                <li>Any name (e.g. "Persona Bootstrap"), single tenant</li>
                 <li>Add redirect URI (Web): <code className="font-mono text-brand-primary break-all">{window.location.origin}/entra-callback</code></li>
-                <li>Add delegated permissions: <em>Application.ReadWrite.All</em>, <em>AppRoleAssignment.ReadWrite.All</em></li>
               </ol>
-              <p className="text-slate-500">This bootstrap app is only needed once.</p>
+              <p className="text-slate-500">That's it — just a name and a redirect URI. Persona handles permissions during sign-in.</p>
             </div>
 
-            <div>
-              <label className={labelCls}>Entra Tenant ID</label>
-              <input
-                className={inputCls}
-                value={autoTenantId}
-                onChange={e => setAutoTenantId(e.target.value)}
-                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              />
-            </div>
             <div>
               <label className={labelCls}>Bootstrap App Client ID</label>
               <input
@@ -346,6 +346,9 @@ function EntraSection({ authHeaders }) {
                 onChange={e => setAutoClientId(e.target.value)}
                 placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
               />
+              <p className="mt-1 text-xs text-slate-500">
+                Copy the Application (client) ID from the app you just created.
+              </p>
             </div>
 
             {autoError && (
@@ -355,7 +358,7 @@ function EntraSection({ authHeaders }) {
             <div className="flex gap-3">
               <button
                 onClick={handleAutoSignIn}
-                disabled={autoLoading || !autoTenantId.trim() || !autoClientId.trim()}
+                disabled={autoLoading || !autoClientId.trim()}
                 className="flex items-center gap-2 rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {autoLoading && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -544,6 +547,7 @@ function EntraSection({ authHeaders }) {
 
 export default function SettingsPage() {
   const { getToken } = useAuth()
+  const { status } = useAppConfig()
 
   const [form, setForm] = useState({
     host: '',
@@ -840,7 +844,7 @@ export default function SettingsPage() {
       {/* ------------------------------------------------------------------ */}
       {/* Entra ID                                                            */}
       {/* ------------------------------------------------------------------ */}
-      <EntraSection authHeaders={authHeaders} />
+      <EntraSection authHeaders={authHeaders} bootstrapClientId={status?.entra_bootstrap_client_id || ''} />
     </div>
   )
 }
