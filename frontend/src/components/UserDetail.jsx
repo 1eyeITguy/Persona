@@ -520,11 +520,21 @@ function LicensesTab({ user }) {
       .finally(() => setTenantLoading(false))
   }
 
+  // Fetch config on mount so custom names show in the assigned list immediately
+  useEffect(() => {
+    if (user.is_synced) fetchTenant()
+  }, [user.entra_object_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
   function openModal() {
     if (!tenantLicenses) fetchTenant()
     setModalOpen(true)
     setError(null)
     setSuccess(null)
+  }
+
+  // Apply custom name from config if available, otherwise use graph display name
+  function resolvedName(lic) {
+    return licenseConfig[lic.sku_id]?.display_name || lic.display_name
   }
 
   function toggleRemoval(skuId) {
@@ -655,7 +665,7 @@ function LicensesTab({ user }) {
                     className="mt-0.5 accent-danger shrink-0"
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
+                    <p className="truncate text-sm font-medium text-slate-200">{resolvedName(lic)}</p>
                     <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
                   </div>
                   {marked && <span className="shrink-0 text-xs font-medium text-danger">− Remove</span>}
@@ -1361,6 +1371,13 @@ export function LicenseCardList({ entraObjectId, assignedLicenses = [] }) {
       .finally(() => setTenantLoading(false))
   }
 
+  // Fetch config on mount so custom names apply to the assigned list immediately
+  useEffect(() => { fetchTenant() }, [entraObjectId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function resolvedNameCL(lic) {
+    return licenseConfig[lic.sku_id]?.display_name || lic.display_name
+  }
+
   async function callApi(toAdd, toRemove) {
     const token = getToken()
     const params = new URLSearchParams()
@@ -1423,7 +1440,7 @@ export function LicenseCardList({ entraObjectId, assignedLicenses = [] }) {
                     className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors ${marked ? 'border-danger/40 bg-danger/5' : 'border-brand-primary/30 bg-brand-primary/5 hover:border-brand-primary/50'}`}>
                     <input type="checkbox" checked={marked} onChange={() => {}} onClick={e => e.stopPropagation()} className="mt-0.5 accent-danger shrink-0" />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
+                      <p className="truncate text-sm font-medium text-slate-200">{resolvedNameCL(lic)}</p>
                       <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
                     </div>
                     {marked && <span className="shrink-0 text-xs font-medium text-danger">− Remove</span>}
