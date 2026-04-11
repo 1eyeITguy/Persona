@@ -56,29 +56,213 @@ _DEFAULT_METHOD_LABELS: dict[str, str] = {
     "microsoftAuthenticator":   "Microsoft Authenticator",
 }
 
+# Comprehensive SKU part-number → friendly product name mapping.
+# Source: https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference
 _SKU_NAMES: dict[str, str] = {
-    "SPE_E3": "Microsoft 365 E3",
-    "SPE_E5": "Microsoft 365 E5",
-    "ENTERPRISEPREMIUM": "Microsoft 365 E5",
-    "ENTERPRISEPACK": "Microsoft 365 E3",
-    "SPE_F1": "Microsoft 365 F1",
-    "SPE_F3": "Microsoft 365 F3",
-    "SPB": "Microsoft 365 Business Premium",
-    "O365_BUSINESS_ESSENTIALS": "Microsoft 365 Business Basic",
-    "O365_BUSINESS_PREMIUM": "Microsoft 365 Business Standard",
-    "EXCHANGESTANDARD": "Exchange Online Plan 1",
-    "EXCHANGEENTERPRISE": "Exchange Online Plan 2",
-    "TEAMS_EXPLORATORY": "Microsoft Teams Exploratory",
-    "TEAMS_FREE": "Microsoft Teams Free",
-    "POWER_BI_PRO": "Power BI Pro",
-    "POWER_BI_STANDARD": "Power BI Free",
-    "INTUNE_A": "Microsoft Intune",
-    "EMS": "Enterprise Mobility + Security E3",
-    "EMSPREMIUM": "Enterprise Mobility + Security E5",
-    "AAD_PREMIUM": "Microsoft Entra ID P1",
-    "AAD_PREMIUM_P2": "Microsoft Entra ID P2",
-    "FLOW_FREE": "Power Automate Free",
-    "POWERAPPS_DEV": "Power Apps Developer",
+
+    # ── Microsoft 365 ────────────────────────────────────────────────────────
+    "SPE_E3":                           "Microsoft 365 E3",
+    "SPE_E5":                           "Microsoft 365 E5",
+    "SPE_E3_USGOV_GCCHIGH":             "Microsoft 365 E3 (GCC High)",
+    "SPE_E5_COMPLIANCE":                "Microsoft 365 E5 Compliance",
+    "SPE_E5_SECURITY":                  "Microsoft 365 E5 Security",
+    "SPE_E5_SECURITY_USGOV_GCCHIGH":    "Microsoft 365 E5 Security (GCC High)",
+    "SPE_F1":                           "Microsoft 365 F1",
+    "SPE_F3":                           "Microsoft 365 F3",
+    "SPB":                              "Microsoft 365 Business Premium",
+    "O365_BUSINESS_ESSENTIALS":         "Microsoft 365 Business Basic",
+    "O365_BUSINESS_PREMIUM":            "Microsoft 365 Business Standard",
+    "O365_BUSINESS":                    "Microsoft 365 Apps for Business",
+    "OFFICESUBSCRIPTION":               "Microsoft 365 Apps for Enterprise",
+    "OFFICESUBSCRIPTION_FACULTY":       "Microsoft 365 Apps for Faculty",
+    "OFFICESUBSCRIPTION_STUDENT":       "Microsoft 365 Apps for Students",
+
+    # ── Office 365 ───────────────────────────────────────────────────────────
+    "ENTERPRISEPACK":                   "Office 365 E3",
+    "ENTERPRISEPREMIUM":                "Office 365 E5",
+    "ENTERPRISEPREMIUM_NOPSTNCONF":     "Office 365 E5 (without Audio Conferencing)",
+    "STANDARDPACK":                     "Office 365 E1",
+    "STANDARDWOFFPACK":                 "Office 365 E2",
+    "ENTERPRISEWITHSCAL":               "Office 365 E4",
+    "DESKLESSPACK":                     "Office 365 F3",
+    "LITEPACK":                         "Office 365 P1",
+    "LITEPACK_P2":                      "Office 365 P2",
+    "O365_MIDSIZE":                     "Office 365 Midsize Business",
+    "DEVELOPERPACK":                    "Office 365 E3 Developer",
+    "DEVELOPERPACK_E5":                 "Office 365 E5 Developer",
+    "ENTERPRISEPACKWITHOUTPROPLUS":     "Office 365 E3 (no Microsoft 365 Apps)",
+
+    # Office 365 Education
+    "STANDARDPACK_FACULTY":             "Office 365 A1 for Faculty",
+    "STANDARDPACK_STUDENT":             "Office 365 A1 for Students",
+    "ENTERPRISEPACK_FACULTY":           "Office 365 A3 for Faculty",
+    "ENTERPRISEPACK_STUDENT":           "Office 365 A3 for Students",
+    "ENTERPRISEPREMIUM_FACULTY":        "Office 365 A5 for Faculty",
+    "ENTERPRISEPREMIUM_STUDENT":        "Office 365 A5 for Students",
+
+    # ── Microsoft 365 Education ──────────────────────────────────────────────
+    "M365EDU_A1":                       "Microsoft 365 A1",
+    "M365EDU_A3_FACULTY":               "Microsoft 365 A3 for Faculty",
+    "M365EDU_A3_STUDENT":               "Microsoft 365 A3 for Students",
+    "M365EDU_A5_FACULTY":               "Microsoft 365 A5 for Faculty",
+    "M365EDU_A5_STUDENT":               "Microsoft 365 A5 for Students",
+    "M365EDU_A5_STUUSEBNFT":            "Microsoft 365 A5 Student Use Benefits",
+
+    # ── Exchange Online ───────────────────────────────────────────────────────
+    "EXCHANGESTANDARD":                 "Exchange Online Plan 1",
+    "EXCHANGEENTERPRISE":               "Exchange Online Plan 2",
+    "EXCHANGEDESKLESS":                 "Exchange Online Kiosk",
+    "EXCHANGETELCO":                    "Exchange Online POP",
+    "EXCHANGE_S_DESKLESS_GOV":          "Exchange Online Kiosk (Government)",
+    "EXCHANGE_L_STANDARD":              "Exchange Online Plan 1 (Large)",
+    "EXCHANGEARCHIVE":                  "Exchange Online Archiving for Exchange Server",
+    "EXCHANGEARCHIVE_ADDON":            "Exchange Online Archiving for Exchange Online",
+    "EOP_ENTERPRISE_FACULTY":           "Exchange Online Protection",
+    "EOP_ENTERPRISE":                   "Exchange Online Protection",
+
+    # ── SharePoint Online ─────────────────────────────────────────────────────
+    "SHAREPOINTSTANDARD":               "SharePoint Online Plan 1",
+    "SHAREPOINTENTERPRISE":             "SharePoint Online Plan 2",
+    "SHAREPOINTDESKLESS":               "SharePoint Online Kiosk",
+    "SHAREPOINTSTORAGE":                "SharePoint Online Storage",
+    "ONEDRIVE_BASIC":                   "OneDrive for Business Basic",
+
+    # ── Microsoft Teams ───────────────────────────────────────────────────────
+    "TEAMS_EXPLORATORY":                "Microsoft Teams Exploratory",
+    "TEAMS_FREE":                       "Microsoft Teams Free",
+    "TEAMS_FREE_GOV":                   "Microsoft Teams Free (Government)",
+    "MCO_TEAMS_IW":                     "Microsoft Teams Trial",
+    "MCOMEETADV":                       "Microsoft 365 Audio Conferencing",
+    "MCOEV":                            "Microsoft 365 Phone System",
+    "MCOEV_FACULTY":                    "Microsoft 365 Phone System for Faculty",
+    "MCOEV_DOD":                        "Microsoft 365 Phone System (DoD)",
+    "MCOEV_GCCHIGH":                    "Microsoft 365 Phone System (GCC High)",
+    "MCOPSTN1":                         "Microsoft 365 Domestic Calling Plan",
+    "MCOPSTN2":                         "Microsoft 365 International Calling Plan",
+    "MCOPSTN_5":                        "Microsoft 365 Domestic Calling Plan (120 min)",
+    "MCOPSTNC":                         "Microsoft 365 Communications Credits",
+    "Teams_Rooms_Standard":             "Microsoft Teams Rooms Standard",
+    "Teams_Rooms_Pro":                  "Microsoft Teams Rooms Pro",
+    "MEETING_ROOM":                     "Microsoft Teams Rooms Standard",
+
+    # ── Microsoft Intune ─────────────────────────────────────────────────────
+    "INTUNE_A":                         "Microsoft Intune Plan 1",
+    "INTUNE_A_D":                       "Microsoft Intune Plan 1 for Education",
+    "INTUNE_SMB":                       "Microsoft Intune SMB",
+    "INTUNE_O365":                      "Microsoft Intune for Office 365",
+    "INTUNE_STORAGE":                   "Intune Extra Storage",
+
+    # ── Microsoft Entra ID (formerly Azure AD) ────────────────────────────────
+    "AAD_BASIC":                        "Microsoft Entra ID Basic",
+    "AAD_PREMIUM":                      "Microsoft Entra ID P1",
+    "AAD_PREMIUM_P2":                   "Microsoft Entra ID P2",
+    "AAD_PREMIUM_FACULTY":              "Microsoft Entra ID P1 for Faculty",
+    "ENTRA_ID_GOVERNANCE":              "Microsoft Entra ID Governance",
+    "ENTRA_ID_GOVERNANCE_STANDALONE":   "Microsoft Entra ID Governance Standalone",
+
+    # ── Enterprise Mobility + Security ───────────────────────────────────────
+    "EMS":                              "Enterprise Mobility + Security E3",
+    "EMSPREMIUM":                       "Enterprise Mobility + Security E5",
+    "EMS_EDU":                          "Enterprise Mobility + Security A3 for Faculty",
+    "EMSPREMIUM_STUDENT":               "Enterprise Mobility + Security A5 for Students",
+
+    # ── Microsoft Defender / Security ────────────────────────────────────────
+    "ATP_ENTERPRISE":                   "Microsoft Defender for Office 365 Plan 1",
+    "THREAT_INTELLIGENCE":              "Microsoft Defender for Office 365 Plan 2",
+    "WINDEFATP":                        "Microsoft Defender for Endpoint Plan 2",
+    "WIN_DEF_ATP":                      "Microsoft Defender for Endpoint Plan 1",
+    "MDE_SMB":                          "Microsoft Defender for Business",
+    "ATA":                              "Microsoft Defender for Identity",
+    "M365_DEFENDER":                    "Microsoft 365 Defender",
+    "ADALLOM_S_APP_SEC":                "Microsoft Defender for Cloud Apps",
+    "ADALLOM_STANDALONE":               "Microsoft Defender for Cloud Apps",
+    "CVCF_ADDON":                       "Microsoft Defender Vulnerability Management",
+
+    # ── Azure Information Protection ──────────────────────────────────────────
+    "RMS_S_ENTERPRISE":                 "Azure Information Protection Premium P1",
+    "RMS_S_PREMIUM":                    "Azure Information Protection Premium P1",
+    "RMS_S_PREMIUM2":                   "Azure Information Protection Premium P2",
+    "INFORMATION_PROTECTION_COMPLIANCE": "Microsoft Purview Information Protection",
+
+    # ── Power BI ─────────────────────────────────────────────────────────────
+    "POWER_BI_PRO":                     "Power BI Pro",
+    "POWER_BI_PREMIUM_PER_USER":        "Power BI Premium Per User",
+    "POWER_BI_PREMIUM_PER_USER_ADDON":  "Power BI Premium Per User Add-On",
+    "POWER_BI_STANDARD":                "Power BI (free)",
+    "PBI_PREMIUM_P1_ADDON":             "Power BI Premium P1",
+    "PBI_PREMIUM_P2_ADDON":             "Power BI Premium P2",
+
+    # ── Power Platform ────────────────────────────────────────────────────────
+    "FLOW_FREE":                        "Power Automate Free",
+    "FLOW_PER_USER":                    "Power Automate per user plan",
+    "FLOW_PER_USER_DEPT":               "Power Automate per user plan (dept)",
+    "FLOW_PER_USER_GCC":                "Power Automate per user plan (GCC)",
+    "FLOW_BUSINESS_PROCESS":            "Power Automate per flow plan",
+    "POWERAPPS_DEV":                    "Power Apps Developer Plan",
+    "POWERAPPS_PER_USER":               "Power Apps per user plan",
+    "POWERAPPS_PER_USER_DEPT":          "Power Apps per user plan (dept)",
+    "POWERAPPS_PER_USER_GCC":           "Power Apps per user plan (GCC)",
+    "POWERAPPS_VIRAL":                  "Power Apps Plan 2 Trial",
+    "POWERAUTOMATE_ATTENDED_RPA":       "Power Automate with Attended RPA",
+    "POWERAUTOMATE_UNATTENDED_RPA":     "Power Automate with Unattended RPA",
+    "POWER_VIRTUAL_AGENTS_VIRAL":       "Power Virtual Agents Viral Trial",
+
+    # ── Visio ─────────────────────────────────────────────────────────────────
+    "VISIOCLIENT":                      "Visio Online Plan 2",
+    "VISIOONLINE_PLAN1":                "Visio Online Plan 1",
+    "VISIO_PLAN1_DEP":                  "Visio Plan 1",
+    "VISIO_PLAN2_DEP":                  "Visio Plan 2",
+
+    # ── Project ───────────────────────────────────────────────────────────────
+    "PROJECTPREMIUM":                   "Project Online Premium",
+    "PROJECTPROFESSIONAL":              "Project Online Professional",
+    "PROJECTESSENTIALS":                "Project Online Essentials",
+    "PROJECT_P1":                       "Project Plan 1",
+    "PROJECT_P3":                       "Project Plan 3",
+    "PROJECT_P5":                       "Project Plan 5",
+    "PROJECTCLIENT":                    "Project for Office 365",
+
+    # ── Windows ───────────────────────────────────────────────────────────────
+    "WIN10_PRO_ENT_SUB":                "Windows 10/11 Enterprise E3",
+    "WIN10_VDA_E3":                     "Windows 10/11 Enterprise E3 VDA",
+    "WIN10_VDA_E5":                     "Windows 10/11 Enterprise E5 VDA",
+    "WIN_ENT_E3":                       "Windows 10/11 Enterprise E3",
+    "WIN_ENT_E5":                       "Windows 10/11 Enterprise E5",
+    "WINDOWS_STORE":                    "Windows Store for Business",
+
+    # ── Dynamics 365 ─────────────────────────────────────────────────────────
+    "DYN365_ENTERPRISE_PLAN1":          "Dynamics 365 Customer Engagement Plan",
+    "DYN365_ENTERPRISE_SALES":          "Dynamics 365 Sales Enterprise",
+    "DYN365_ENTERPRISE_CUSTOMER_SERVICE": "Dynamics 365 Customer Service Enterprise",
+    "DYN365_ENTERPRISE_FIELD_SERVICE":  "Dynamics 365 Field Service",
+    "DYN365_ENTERPRISE_TEAM_MEMBERS":   "Dynamics 365 Team Members",
+    "DYN365_FINANCIALS_BUSINESS_SKU":   "Dynamics 365 Business Central Essentials",
+    "DYN365_BUSINESS_PREMIUM":          "Dynamics 365 Business Central Premium",
+    "DYN365_AI_SERVICE_INSIGHTS":       "Dynamics 365 Customer Insights",
+    "DYN365_MARKETING_USER":            "Dynamics 365 Marketing",
+    "Dynamics_365_for_Operations":      "Dynamics 365 Finance",
+    "DYN365_TALENT_ENTERPRISE":         "Dynamics 365 Talent",
+
+    # ── Microsoft Copilot ─────────────────────────────────────────────────────
+    "Microsoft_365_Copilot":            "Microsoft 365 Copilot",
+    "Copilot_Studio_in_a_Day_AddOn":    "Copilot Studio",
+    "COPILOT_STUDIO_VIRAL":             "Copilot Studio Viral Trial",
+
+    # ── Miscellaneous ─────────────────────────────────────────────────────────
+    "RIGHTSMANAGEMENT":                 "Azure Rights Management",
+    "RIGHTSMANAGEMENT_ADHOC":           "Rights Management Adhoc",
+    "MCOSTANDARD":                      "Skype for Business Online Plan 2",
+    "MCOIMP":                           "Skype for Business Online Plan 1",
+    "YAMMER_ENTERPRISE":                "Yammer Enterprise",
+    "YAMMER_MIDSIZE":                   "Yammer Midsize",
+    "KAIZALA_STANDALONE":               "Microsoft Kaizala Pro",
+    "FORMS_PRO":                        "Microsoft Dynamics 365 Customer Voice",
+    "WHITEBOARD_PLAN3":                 "Microsoft Whiteboard Plan 3",
+    "STREAM":                           "Microsoft Stream",
+    "STREAM_P2":                        "Microsoft Stream Plan 2",
+    "NONPROFIT_PORTAL":                 "Microsoft Nonprofit Portal",
+    "CRMSTANDARD":                      "Dynamics CRM Online",
+    "CRMPLAN2":                         "Dynamics CRM Online Basic",
 }
 
 
@@ -590,6 +774,78 @@ def get_entra_user_devices(
         logger.debug("Entra registered devices fetch error for %s: %s", object_id, exc)
 
     return sorted(devices.values(), key=lambda d: (d.get("display_name") or "").lower())
+
+
+def get_tenant_licenses(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+) -> list[dict]:
+    """
+    Fetch all Microsoft 365 / Entra license subscriptions for the tenant.
+
+    Calls GET /subscribedSkus.
+    Requires Directory.Read.All or Organization.Read.All application permission.
+
+    Returns a list of dicts matching the TenantLicense schema, sorted by
+    display_name ascending. Deleted SKUs are excluded.
+
+    Caller MUST use run_in_threadpool.
+    """
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    try:
+        app = msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=authority,
+        )
+        result = app.acquire_token_for_client(
+            scopes=["https://graph.microsoft.com/.default"]
+        )
+    except Exception:
+        return []
+
+    if "access_token" not in result:
+        return []
+
+    token = result["access_token"]
+    try:
+        resp = _requests.get(
+            f"{_GRAPH_BASE}/subscribedSkus",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"$select": "skuId,skuPartNumber,capabilityStatus,consumedUnits,prepaidUnits"},
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.warning("get_tenant_licenses HTTP %s: %s", resp.status_code, resp.text[:200])
+            return []
+    except Exception as exc:
+        logger.warning("get_tenant_licenses error: %s", exc)
+        return []
+
+    licenses: list[dict] = []
+    for sku in resp.json().get("value", []):
+        status = sku.get("capabilityStatus", "Enabled")
+        if status == "Deleted":
+            continue  # skip fully removed SKUs
+
+        sku_part = sku.get("skuPartNumber", "")
+        prepaid = sku.get("prepaidUnits") or {}
+        total = prepaid.get("enabled", 0)
+        consumed = sku.get("consumedUnits", 0)
+
+        licenses.append({
+            "sku_id": sku.get("skuId", ""),
+            "sku_part_number": sku_part,
+            "display_name": _friendly_sku(sku_part),
+            "total": total,
+            "assigned": consumed,
+            "available": max(total - consumed, 0),
+            "warning": prepaid.get("warning", 0),
+            "capability_status": status,
+        })
+
+    return sorted(licenses, key=lambda x: x["display_name"].lower())
 
 
 def get_entra_only_users(

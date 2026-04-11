@@ -31,6 +31,7 @@ from backend.auth.msal import (
     get_entra_user,
     get_entra_user_devices,
     get_entra_user_photo,
+    get_tenant_licenses,
     test_entra_connection as _test_entra,
 )
 from backend.deps import require_jwt
@@ -40,6 +41,7 @@ from backend.models.schemas import (
     EntraDevice,
     EntraOnlyUser,
     EntraUserResponse,
+    TenantLicense,
     TestEntraConnectionResponse,
 )
 
@@ -127,6 +129,34 @@ async def delete_entra_config(
 # ---------------------------------------------------------------------------
 # Cloud user data
 # ---------------------------------------------------------------------------
+
+
+@router.get("/licenses", response_model=list[TenantLicense])
+async def get_licenses(
+    _token: dict = Depends(require_jwt),
+) -> list[TenantLicense]:
+    """
+    Return all active Microsoft 365 / Entra license subscriptions for the tenant.
+    Shows total purchased, assigned (consumed), and available seats per SKU.
+
+    Requires Directory.Read.All or Organization.Read.All on the app registration.
+    Returns 503 if Entra is not configured.
+    JWT required.
+    """
+    cfg = get_entra_settings()
+    if cfg is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Entra ID is not configured. Connect it in Settings first.",
+        )
+
+    raw = await run_in_threadpool(
+        get_tenant_licenses,
+        cfg["tenant_id"],
+        cfg["client_id"],
+        cfg["client_secret"],
+    )
+    return [TenantLicense(**lic) for lic in raw]
 
 
 @router.get("/users-cloud-only", response_model=list[EntraOnlyUser])

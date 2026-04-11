@@ -1,6 +1,6 @@
 /* global __APP_VERSION__ */
 import { BrowserRouter, Routes, Route, Navigate, Outlet, NavLink } from 'react-router-dom'
-import { Settings, Shield, LogOut, Users, UserX, Cloud } from 'lucide-react'
+import { Settings, Shield, LogOut, Users, UserX, Cloud, Tag } from 'lucide-react'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 import { useAppConfig } from './hooks/useAppConfig.js'
 import SetupWizard from './components/SetupWizard.jsx'
@@ -9,6 +9,7 @@ import SettingsPage from './components/SettingsPage.jsx'
 import SyncedUsersPage from './pages/SyncedUsersPage.jsx'
 import AdOnlyUsersPage from './pages/AdOnlyUsersPage.jsx'
 import EntraOnlyPage from './pages/EntraOnlyPage.jsx'
+import LicensesPage from './pages/LicensesPage.jsx'
 
 // ---------------------------------------------------------------------------
 // Loading screen
@@ -28,6 +29,8 @@ function FullScreenSpinner() {
 
 function AppShell() {
   const { user, logout } = useAuth()
+  const { status } = useAppConfig()
+  const entraConfigured = status?.entra_configured ?? false
 
   return (
     <div className="flex h-screen bg-app-bg text-slate-200">
@@ -92,6 +95,31 @@ function AppShell() {
               Entra Only
             </NavLink>
           </div>
+
+          {/* Licenses — only when Entra is connected */}
+          {entraConfigured && (
+            <>
+              <p className="mt-4 flex items-center gap-2.5 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <Tag className="h-3.5 w-3.5 shrink-0" />
+                Licenses
+              </p>
+              <div className="ml-2 space-y-0.5">
+                <NavLink
+                  to="/licenses"
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                      isActive
+                        ? 'bg-brand-primary/20 text-brand-primary font-medium'
+                        : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                    }`
+                  }
+                >
+                  <Tag className="h-4 w-4 shrink-0" />
+                  Tenant Licenses
+                </NavLink>
+              </div>
+            </>
+          )}
         </nav>
 
         {/* Gear — settings */}
@@ -162,6 +190,7 @@ function AppRoutes() {
         <Route path="/identity/synced"   element={<SyncedUsersPage />} />
         <Route path="/identity/ad-only"  element={<AdOnlyUsersPage />} />
         <Route path="/identity/entra"    element={<EntraOnlyPage />} />
+        <Route path="/licenses"            element={<LicensesPage />} />
         <Route path="/settings"          element={<SettingsPage />} />
         {/* Legacy redirects */}
         <Route path="/users"             element={<Navigate to="/identity/synced" replace />} />

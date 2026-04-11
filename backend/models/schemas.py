@@ -232,6 +232,22 @@ class EntraUserResponse(BaseModel):
     groups: list[EntraGroupRef] = Field(default_factory=list)
 
 
+class TenantLicense(BaseModel):
+    """
+    A tenant-level Microsoft 365 / Entra license subscription.
+    Returned by GET /api/v1/entra/licenses.
+    """
+
+    sku_id: str                         # GUID
+    sku_part_number: str                # e.g. "ENTERPRISEPACK"
+    display_name: str                   # friendly name from _SKU_NAMES mapping
+    total: int                          # prepaidUnits.enabled
+    assigned: int                       # consumedUnits
+    available: int                      # total - assigned (can be negative if over-provisioned)
+    warning: int = 0                    # prepaidUnits.warning (expiring soon)
+    capability_status: str = "Enabled"  # "Enabled" | "Warning" | "Suspended" | "Deleted"
+
+
 class EntraDevice(BaseModel):
     """
     A device associated with an Entra/Intune user.
