@@ -584,7 +584,7 @@ function ExchangePSSection({ authHeaders }) {
   const fileRef = useRef(null)
 
   useEffect(() => {
-    axios.get('/api/v1/settings/exchange-ps-config', { headers: authHeaders })
+    axios.get('/api/v1/settings/exchange-ps-config', { headers: authHeaders() })
       .then(res => {
         setConfig(res.data)
         setAppId(res.data.app_id || '')
@@ -603,10 +603,10 @@ function ExchangePSSection({ authHeaders }) {
       form.append('tenant_domain', tenantDomain.trim())
       if (certFile) form.append('certificate', certFile)
       if (certPassword) form.append('cert_password', certPassword)
-      const res = await axios.put('/api/v1/settings/exchange-ps-config', form, { headers: authHeaders })
+      const res = await axios.put('/api/v1/settings/exchange-ps-config', form, { headers: authHeaders() })
       setSaveResult({ success: true, message: 'Configuration saved.' + (res.data.cert_thumbprint ? ` Thumbprint: ${res.data.cert_thumbprint}` : '') })
       // Reload config
-      const cfg = await axios.get('/api/v1/settings/exchange-ps-config', { headers: authHeaders })
+      const cfg = await axios.get('/api/v1/settings/exchange-ps-config', { headers: authHeaders() })
       setConfig(cfg.data)
     } catch (err) {
       setSaveResult({ success: false, message: err.response?.data?.detail || 'Save failed.' })
@@ -619,7 +619,7 @@ function ExchangePSSection({ authHeaders }) {
     setTestResult(null)
     setTesting(true)
     try {
-      const res = await axios.post('/api/v1/settings/test-exchange-ps', {}, { headers: authHeaders })
+      const res = await axios.post('/api/v1/settings/test-exchange-ps', {}, { headers: authHeaders() })
       setTestResult(res.data)
     } catch (err) {
       setTestResult({ success: false, message: err.response?.data?.detail || 'Test failed.' })
