@@ -580,6 +580,7 @@ function ExchangePSSection({ authHeaders }) {
   const [testResult, setTestResult] = useState(null)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [guideOpen, setGuideOpen] = useState(true)
   const fileRef = useRef(null)
 
   useEffect(() => {
@@ -636,8 +637,123 @@ function ExchangePSSection({ authHeaders }) {
       <div>
         <h2 className="text-base font-semibold text-white">Exchange Online PowerShell</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Certificate-based app authentication for Exchange Online. Required for shared mailbox access.
+          Certificate-based app authentication for Exchange Online. Required for shared mailbox access
+          and the Exchange SOA org-flag check. Uses the same app registration as Entra.
         </p>
+      </div>
+
+      {/* Setup guide */}
+      <div className="rounded-md border border-border-subtle bg-app-bg overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setGuideOpen(v => !v)}
+          className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
+        >
+          <span className="text-xs font-medium text-slate-300">Setup guide — how to configure Exchange Online PowerShell access</span>
+          <ChevronRight className={`h-4 w-4 text-slate-500 transition-transform ${guideOpen ? 'rotate-90' : ''}`} />
+        </button>
+
+        {guideOpen && (
+          <div className="border-t border-border-subtle px-4 py-4 space-y-5 text-xs text-slate-400">
+
+            {/* Prerequisites */}
+            <div>
+              <p className="font-semibold text-slate-300 mb-1">Prerequisites</p>
+              <ul className="list-disc ml-4 space-y-1">
+                <li>Entra must already be connected (Settings → Entra tab) — same app registration is reused.</li>
+                <li>The <span className="font-mono">Exchange.ManageAsApp</span> Graph API permission must be added to the app registration and admin-consented.</li>
+                <li>You need an account with <strong className="text-slate-300">Exchange Administrator</strong> or <strong className="text-slate-300">Global Administrator</strong> rights to run the PowerShell setup commands below.</li>
+              </ul>
+            </div>
+
+            {/* Step 1: Certificate */}
+            <div>
+              <p className="font-semibold text-slate-300 mb-1">Step 1 — Generate a certificate</p>
+              <p className="mb-2">Run this in Windows PowerShell on your own machine to create a self-signed certificate and export it in both formats:</p>
+              <pre className="bg-black/40 rounded p-3 font-mono text-slate-300 overflow-x-auto whitespace-pre leading-relaxed">{`# Create the cert (valid 2 years)
+$cert = New-SelfSignedCertificate \`
+  -Subject "CN=Persona-ExchangePS" \`
+  -CertStoreLocation "Cert:\\CurrentUser\\My" \`
+  -KeyExportPolicy Exportable \`
+  -KeySpec Signature \`
+  -KeyLength 2048 \`
+  -HashAlgorithm SHA256 \`
+  -NotAfter (Get-Date).AddYears(2)
+
+# Export PFX — upload this to Persona below
+$pw = ConvertTo-SecureString "YourPFXPassword" -AsPlainText -Force
+Export-PfxCertificate -Cert $cert \`
+  -FilePath "$env:USERPROFILE\\Desktop\\persona-exchange.pfx" \`
+  -Password $pw
+
+# Export CER — upload this to Azure in Step 2
+Export-Certificate -Cert $cert \`
+  -FilePath "$env:USERPROFILE\\Desktop\\persona-exchange.cer"`}</pre>
+            </div>
+
+            {/* Step 2: Upload to Azure */}
+            <div>
+              <p className="font-semibold text-slate-300 mb-1">Step 2 — Upload the certificate to the app registration</p>
+              <ol className="list-decimal ml-4 space-y-1">
+                <li>Open <strong className="text-slate-300">Azure Portal → Entra ID → App Registrations</strong> → select the Persona app.</li>
+                <li>Go to <strong className="text-slate-300">Certificates &amp; secrets → Certificates</strong>.</li>
+                <li>Click <strong className="text-slate-300">Upload certificate</strong> and select the <span className="font-mono">.cer</span> file (not the PFX).</li>
+                <li>Note the <strong className="text-slate-300">Thumbprint</strong> shown after upload — you can verify it matches what Persona shows after you upload the PFX below.</li>
+              </ol>
+            </div>
+
+            {/* Step 3: Object ID */}
+            <div>
+              <p className="font-semibold text-slate-300 mb-1">Step 3 — Get the app's Object ID</p>
+              <p>On the app registration <strong className="text-slate-300">Overview</strong> page in Entra, copy the <strong className="text-slate-300">Object ID</strong>. This is different from the Application (client) ID — you need both for the next step.</p>
+              <div className="mt-2 rounded bg-black/30 px-3 py-2 font-mono text-slate-400">
+                Application (client) ID → used as <span className="text-brand-primary">-AppId</span> and in the form below<br/>
+                Object ID → used as <span className="text-brand-primary">-ServiceId</span> (Step 4 only)
+              </div>
+            </div>
+
+            {/* Step 4: EXO PowerShell */}
+            <div>
+              <p className="font-semibold text-slate-300 mb-1">Step 4 — Create the service principal in Exchange Online</p>
+              <p className="mb-2">Run these commands in <strong className="text-slate-300">Exchange Online PowerShell</strong> as an Exchange or Global admin. You only need to do this once.</p>
+              <pre className="bg-black/40 rounded p-3 font-mono text-slate-300 overflow-x-auto whitespace-pre leading-relaxed">{`# Install the module if you haven't already
+Install-Module -Name ExchangeOnlineManagement -Force -Scope CurrentUser
+
+# Connect (sign in with your admin account)
+Connect-ExchangeOnline
+
+# Replace with your actual values from Entra
+$clientId  = "<Application (client) ID>"   # from app Overview
+$objectId  = "<Object ID>"                  # from app Overview (NOT client ID)
+
+# Register the app as a service principal in Exchange Online
+$sp = New-ServicePrincipal \`
+  -AppId $clientId \`
+  -ServiceId $objectId \`
+  -DisplayName "Persona"
+
+# Grant read-only access to recipients and mailboxes
+New-ManagementRoleAssignment \`
+  -Role "View-Only Recipients" \`
+  -App $sp.Identity
+
+# Disconnect when done
+Disconnect-ExchangeOnline -Confirm:$false`}</pre>
+              <p className="mt-2 text-slate-500">Role assignment replication in Exchange Online can take <strong className="text-slate-400">5–15 minutes</strong>. If the connection test fails immediately, wait a few minutes and try again.</p>
+            </div>
+
+            {/* Step 5 */}
+            <div>
+              <p className="font-semibold text-slate-300 mb-1">Step 5 — Fill in the form below and test</p>
+              <ul className="list-disc ml-4 space-y-1">
+                <li>Enter the <strong className="text-slate-300">Application (client) ID</strong> and your tenant's <strong className="text-slate-300">primary domain</strong> (e.g. <span className="font-mono">contoso.com</span>).</li>
+                <li>Upload the <span className="font-mono">.pfx</span> file you exported in Step 1.</li>
+                <li>Click <strong className="text-slate-300">Save</strong>, then <strong className="text-slate-300">Test Connection</strong>.</li>
+              </ul>
+            </div>
+
+          </div>
+        )}
       </div>
 
       {config && (

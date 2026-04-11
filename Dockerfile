@@ -55,7 +55,10 @@ RUN set -eux; \
     esac; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*; \
-    PWSH_VERSION=7.4.6; \
+    PWSH_VERSION=$(python3 -c \
+        "import urllib.request,json; \
+         d=json.loads(urllib.request.urlopen('https://api.github.com/repos/PowerShell/PowerShell/releases/latest').read()); \
+         print(d['tag_name'].lstrip('v'))"); \
     wget -q \
         "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" \
         -O /tmp/pwsh.tar.gz; \
