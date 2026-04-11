@@ -10,7 +10,8 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Loader2, AlertTriangle, Mail, MailX, ExternalLink, Archive, Clock, Users, Share2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Loader2, AlertTriangle, Mail, MailX, ExternalLink, Users, Share2 } from 'lucide-react'
 import axios from 'axios'
 
 // ---------------------------------------------------------------------------
@@ -232,12 +233,12 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
         <p className="mt-3 text-sm text-slate-400">
           Connect Entra ID to see current mailbox details from Exchange Online.
         </p>
-        <a
-          href="/settings"
+        <Link
+          to="/settings"
           className="mt-2 inline-flex items-center gap-1 text-sm text-brand-primary hover:underline"
         >
           Go to Settings <ExternalLink className="h-3 w-3" />
-        </a>
+        </Link>
       </WarningCard>
     )
   }
@@ -252,12 +253,12 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
           "Connect Entra ID to see mailbox details."
         }
       >
-        <a
-          href="/settings"
+        <Link
+          to="/settings"
           className="mt-2 inline-flex items-center gap-1 text-sm text-brand-primary hover:underline"
         >
           Go to Settings <ExternalLink className="h-3 w-3" />
-        </a>
+        </Link>
       </WarningCard>
     )
   }

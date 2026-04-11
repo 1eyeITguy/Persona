@@ -82,7 +82,13 @@ def resolve_exchange_soa(
     # Layer 2 — Org-wide block flag
     if block_exchange_provisioning_from_onprem is True:
         if has_legacy_ad_exchange:
+            # Graph confirms mailbox is in Exchange Online — serve cloud data.
+            # STALE_AD_ATTRS is only correct when we *can't* reach Graph to verify.
+            if graph_mailbox_exists is True:
+                return ExchangeSOA.CLOUD
+            # Entra not connected — can't confirm current state, flag stale attrs
             return ExchangeSOA.STALE_AD_ATTRS
+        # No legacy AD attrs
         if graph_mailbox_exists is True:
             return ExchangeSOA.CLOUD
         if graph_mailbox_exists is None:

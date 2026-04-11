@@ -580,7 +580,7 @@ function ExchangePSSection({ authHeaders }) {
   const [testResult, setTestResult] = useState(null)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [guideOpen, setGuideOpen] = useState(true)
+  const [guideOpen, setGuideOpen] = useState(false)
   const fileRef = useRef(null)
 
   useEffect(() => {
