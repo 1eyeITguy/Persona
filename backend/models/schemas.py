@@ -243,6 +243,32 @@ class EntraUserResponse(BaseModel):
     groups: list[EntraGroupRef] = Field(default_factory=list)
 
 
+class LicenseConfigEntry(BaseModel):
+    """
+    A tenant license merged with its stored Persona configuration.
+    Returned by GET /api/v1/settings/license-config.
+    """
+
+    sku_id: str
+    sku_part_number: str
+    graph_display_name: str         # friendly name from our SKU mapping
+    custom_name: Optional[str] = None   # admin-set override (None = use graph_display_name)
+    display_name: str               # effective: custom_name or graph_display_name
+    assignable: bool = False        # whether this SKU appears in the user blade assign popup
+    total: int = 0
+    assigned: int = 0
+    available: int = 0
+    capability_status: str = "Enabled"
+
+
+class LicenseConfigSave(BaseModel):
+    """One entry in a PUT /api/v1/settings/license-config request."""
+
+    sku_id: str
+    assignable: bool
+    custom_name: Optional[str] = None  # empty string treated as None (revert to graph name)
+
+
 class TenantLicense(BaseModel):
     """
     A tenant-level Microsoft 365 / Entra license subscription.

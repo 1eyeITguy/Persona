@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Loader2, ExternalLink, AlertTriangle, ChevronRight } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Loader2, ExternalLink, AlertTriangle, ChevronRight, Search } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 
@@ -347,6 +347,219 @@ function EntraSection({ authHeaders }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// LicensesSection
+// ---------------------------------------------------------------------------
+
+function LicensesSection({ authHeaders }) {
+  const [licenses, setLicenses] = useState(null)   // null = loading
+  const [loading, setLoading]   = useState(true)
+  const [saving, setSaving]     = useState(false)
+  const [saveResult, setSaveResult] = useState(null)  // null | 'ok' | string (error)
+  const [q, setQ]               = useState('')
+
+  // Local editable state: {[sku_id]: {assignable, custom_name}}
+  const [edits, setEdits] = useState({})
+
+  useEffect(() => {
+    axios
+      .get('/api/v1/settings/license-config', { headers: authHeaders() })
+      .then(res => {
+        setLicenses(res.data)
+        // Initialise edits from loaded data
+        const init = {}
+        res.data.forEach(l => {
+          init[l.sku_id] = { assignable: l.assignable, custom_name: l.custom_name ?? '' }
+        })
+        setEdits(init)
+      })
+      .catch(() => setLicenses([]))
+      .finally(() => setLoading(false))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function setField(skuId, field, value) {
+    setEdits(prev => ({ ...prev, [skuId]: { ...prev[skuId], [field]: value } }))
+    setSaveResult(null)
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setSaveResult(null)
+    const payload = (licenses ?? []).map(l => ({
+      sku_id:      l.sku_id,
+      assignable:  edits[l.sku_id]?.assignable ?? false,
+      custom_name: edits[l.sku_id]?.custom_name?.trim() || null,
+    }))
+    try {
+      await axios.put('/api/v1/settings/license-config', payload, { headers: authHeaders() })
+      setSaveResult('ok')
+    } catch (err) {
+      setSaveResult(err.response?.data?.detail || 'Save failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const filtered = (licenses ?? []).filter(l =>
+    !q || l.display_name.toLowerCase().includes(q.toLowerCase()) ||
+          l.sku_part_number.toLowerCase().includes(q.toLowerCase())
+  )
+
+  const assignableCount = (licenses ?? []).filter(l => edits[l.sku_id]?.assignable).length
+
+  return (
+    <div className="mt-8">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-200">License Configuration</h2>
+          <p className="mt-0.5 text-sm text-slate-500">
+            Control which licenses appear in the user assignment popup and the main Licenses page.
+            Custom names override the default friendly name everywhere in Persona.
+          </p>
+        </div>
+        {licenses && licenses.length > 0 && (
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex shrink-0 items-center gap-1.5 rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-primary/80 disabled:opacity-60 transition-colors"
+          >
+            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Save
+          </button>
+        )}
+      </div>
+
+      {saveResult === 'ok' && (
+        <div className="mb-3 rounded-md border border-success/30 bg-success/5 px-4 py-2 text-sm text-success">
+          Configuration saved. {assignableCount} license{assignableCount !== 1 ? 's' : ''} marked as assignable.
+        </div>
+      )}
+      {saveResult && saveResult !== 'ok' && (
+        <div className="mb-3 rounded-md border border-danger/30 bg-danger/5 px-4 py-2 text-sm text-danger">
+          {saveResult}
+        </div>
+      )}
+
+      <div className="rounded-xl border border-border-subtle bg-surface overflow-hidden">
+        {/* Search bar */}
+        <div className="border-b border-border-subtle px-4 py-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              placeholder="Filter licenses…"
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              className="w-full rounded-md border border-border-subtle bg-app-bg py-1.5 pl-8 pr-3 text-sm text-slate-200 placeholder:text-slate-500 focus:border-brand-primary focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {loading && (
+          <div className="flex items-center gap-2 px-4 py-6 text-sm text-slate-500">
+            <Loader2 className="h-4 w-4 animate-spin" />Loading tenant licenses…
+          </div>
+        )}
+
+        {!loading && licenses?.length === 0 && (
+          <div className="px-4 py-6 text-sm text-slate-500">
+            No tenant licenses found. Ensure Entra ID is connected and the app registration has
+            Directory.Read.All or Organization.Read.All permission.
+          </div>
+        )}
+
+        {!loading && filtered.length > 0 && (
+          <>
+            {/* Column headers */}
+            <div className="grid grid-cols-[auto_1fr_200px_80px_80px_80px] items-center gap-3 border-b border-border-subtle/60 bg-surface/80 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              <span className="w-5">
+                <input
+                  type="checkbox"
+                  title="Toggle all visible"
+                  checked={filtered.every(l => edits[l.sku_id]?.assignable)}
+                  ref={el => {
+                    if (el) {
+                      const some = filtered.some(l => edits[l.sku_id]?.assignable)
+                      const all  = filtered.every(l => edits[l.sku_id]?.assignable)
+                      el.indeterminate = some && !all
+                    }
+                  }}
+                  onChange={e => {
+                    const val = e.target.checked
+                    setEdits(prev => {
+                      const next = { ...prev }
+                      filtered.forEach(l => { next[l.sku_id] = { ...next[l.sku_id], assignable: val } })
+                      return next
+                    })
+                    setSaveResult(null)
+                  }}
+                  className="accent-brand-primary"
+                />
+              </span>
+              <span>License / Custom Name</span>
+              <span>SKU</span>
+              <span className="text-right">Total</span>
+              <span className="text-right">Assigned</span>
+              <span className="text-right">Available</span>
+            </div>
+
+            {/* Rows */}
+            {filtered.map(lic => {
+              const edit = edits[lic.sku_id] ?? { assignable: false, custom_name: '' }
+              return (
+                <div
+                  key={lic.sku_id}
+                  className={`grid grid-cols-[auto_1fr_200px_80px_80px_80px] items-center gap-3 border-b border-border-subtle/30 px-4 py-3 transition-colors last:border-0 ${
+                    edit.assignable ? 'bg-brand-primary/5' : ''
+                  }`}
+                >
+                  {/* Assignable checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={edit.assignable}
+                    title="Assignable from user blade"
+                    onChange={e => setField(lic.sku_id, 'assignable', e.target.checked)}
+                    className="w-5 accent-brand-primary cursor-pointer"
+                  />
+
+                  {/* Name + custom name input */}
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500">{lic.graph_display_name}</p>
+                    <input
+                      type="text"
+                      value={edit.custom_name ?? ''}
+                      onChange={e => setField(lic.sku_id, 'custom_name', e.target.value)}
+                      placeholder="Custom name (optional)…"
+                      className="mt-0.5 w-full rounded border border-border-subtle/50 bg-app-bg px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-brand-primary focus:outline-none"
+                    />
+                  </div>
+
+                  {/* SKU part number */}
+                  <p className="truncate font-mono text-xs text-slate-500">{lic.sku_part_number}</p>
+
+                  {/* Counts */}
+                  <p className="text-right text-sm tabular-nums text-slate-400">{lic.total.toLocaleString()}</p>
+                  <p className="text-right text-sm tabular-nums text-slate-400">{lic.assigned.toLocaleString()}</p>
+                  <p className={`text-right text-sm font-medium tabular-nums ${
+                    lic.available === 0 ? 'text-warning' : 'text-success'
+                  }`}>{lic.available.toLocaleString()}</p>
+                </div>
+              )
+            })}
+          </>
+        )}
+      </div>
+
+      {!loading && licenses && licenses.length > 0 && (
+        <p className="mt-2 text-xs text-slate-600">
+          {assignableCount} of {licenses.length} license{licenses.length !== 1 ? 's' : ''} marked as assignable.
+          Changes take effect immediately after saving.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { getToken } = useAuth()
 
@@ -646,6 +859,7 @@ export default function SettingsPage() {
       {/* Entra ID                                                            */}
       {/* ------------------------------------------------------------------ */}
       <EntraSection authHeaders={authHeaders} />
+      <LicensesSection authHeaders={authHeaders} />
     </div>
   )
 }

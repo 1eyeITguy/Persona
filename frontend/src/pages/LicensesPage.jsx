@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Loader2, AlertCircle, Cloud, Search, ChevronUp, ChevronDown } from 'lucide-react'
+import { Loader2, AlertCircle, Cloud, Search, ChevronUp, ChevronDown, Settings } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 
@@ -51,19 +52,37 @@ function SortIcon({ field, sort }) {
 
 export default function LicensesPage() {
   const { getToken } = useAuth()
-  const [licenses, setLicenses] = useState(null)
-  const [loading, setLoading]   = useState(true)
-  const [error, setError]       = useState(null)
-  const [q, setQ]               = useState('')
-  const [sort, setSort]         = useState({ field: 'display_name', dir: 'asc' })
+  const [licenses, setLicenses]       = useState(null)
+  const [loading, setLoading]         = useState(true)
+  const [error, setError]             = useState(null)
+  const [q, setQ]                     = useState('')
+  const [sort, setSort]               = useState({ field: 'display_name', dir: 'asc' })
+  const [showAll, setShowAll]         = useState(false)  // false = only assignable
+  const [assignableIds, setAssignableIds] = useState(null)  // null while loading
 
   useEffect(() => {
     const token = getToken()
-    axios
-      .get('/api/v1/entra/licenses', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+
+    // Fetch both licenses and config in parallel
+    Promise.all([
+      axios.get('/api/v1/entra/licenses',        { headers }),
+      axios.get('/api/v1/settings/license-config', { headers }),
+    ])
+      .then(([licRes, cfgRes]) => {
+        // Apply custom names from config
+        const cfgMap = Object.fromEntries(cfgRes.data.map(c => [c.sku_id, c]))
+        const merged = licRes.data.map(l => {
+          const cfg = cfgMap[l.sku_id]
+          return {
+            ...l,
+            display_name: cfg?.display_name || l.display_name,
+            assignable:   cfg?.assignable ?? false,
+          }
+        })
+        setLicenses(merged)
+        setAssignableIds(new Set(cfgRes.data.filter(c => c.assignable).map(c => c.sku_id)))
       })
-      .then(res => setLicenses(res.data))
       .catch(err => {
         if (err.response?.status === 503) setError('not_configured')
         else setError('fetch_error')
@@ -82,10 +101,13 @@ export default function LicensesPage() {
   const filtered = useMemo(() => {
     if (!licenses) return []
     const q_lower = q.toLowerCase()
-    const rows = q_lower
-      ? licenses.filter(l => l.display_name.toLowerCase().includes(q_lower) ||
-                             l.sku_part_number.toLowerCase().includes(q_lower))
-      : licenses
+    let rows = showAll
+      ? licenses
+      : licenses.filter(l => l.assignable)
+    if (q_lower) rows = rows.filter(l =>
+      l.display_name.toLowerCase().includes(q_lower) ||
+      l.sku_part_number.toLowerCase().includes(q_lower)
+    )
 
     return [...rows].sort((a, b) => {
       let av = a[sort.field]
@@ -167,14 +189,37 @@ export default function LicensesPage() {
       {/* Header bar */}
       <div className="shrink-0 border-b border-border-subtle bg-surface px-6 py-4">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-base font-semibold text-slate-200">
-            Tenant Licenses
+          <div className="flex items-center gap-3">
+            <h1 className="text-base font-semibold text-slate-200">
+              Tenant Licenses
+              {licenses && (
+                <span className="ml-2 text-sm font-normal text-slate-500">
+                  {filtered.length}{!showAll && licenses.length !== filtered.length ? ` of ${licenses.length}` : ''} SKU{filtered.length !== 1 ? 's' : ''}
+                </span>
+              )}
+            </h1>
+            {/* Show all / assignable toggle */}
             {licenses && (
-              <span className="ml-2 text-sm font-normal text-slate-500">
-                {licenses.length} SKU{licenses.length !== 1 ? 's' : ''}
-              </span>
+              <button
+                onClick={() => setShowAll(v => !v)}
+                className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                  showAll
+                    ? 'border-brand-primary/40 bg-brand-primary/10 text-brand-primary'
+                    : 'border-border-subtle text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {showAll ? 'All licenses' : 'Assignable only'}
+              </button>
             )}
-          </h1>
+            <Link
+              to="/settings"
+              className="flex items-center gap-1 text-xs text-slate-500 hover:text-brand-primary transition-colors"
+              title="Configure licenses in Settings"
+            >
+              <Settings className="h-3 w-3" />
+              Configure
+            </Link>
+          </div>
 
           {/* Search */}
           <div className="relative w-64">
@@ -229,7 +274,20 @@ export default function LicensesPage() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">
-                  No licenses match &ldquo;{q}&rdquo;
+                  {q ? (
+                    <>No licenses match &ldquo;{q}&rdquo;</>
+                  ) : !showAll && licenses?.length > 0 ? (
+                    <>
+                      No assignable licenses configured.{' '}
+                      <Link to="/settings" className="text-brand-primary hover:underline">
+                        Go to Settings → License Configuration
+                      </Link>
+                      {' '}to mark licenses as assignable, or{' '}
+                      <button onClick={() => setShowAll(true)} className="text-brand-primary hover:underline">
+                        show all {licenses.length} licenses
+                      </button>.
+                    </>
+                  ) : 'No licenses found.'}
                 </td>
               </tr>
             )}

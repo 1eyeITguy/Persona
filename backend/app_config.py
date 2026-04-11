@@ -91,3 +91,35 @@ def get_entra_settings() -> dict | None:
 def is_entra_configured() -> bool:
     """True when Entra credentials have been saved and are marked connected."""
     return get_entra_settings() is not None
+
+
+def get_license_config() -> dict:
+    """
+    Return the stored license configuration as a dict keyed by sku_id.
+
+    Each entry: { "assignable": bool, "custom_name": str | null }
+
+    Missing entries default to assignable=False, no custom name.
+    """
+    config = load_config()
+    return config.get("license_config", {})
+
+
+def save_license_config(entries: list[dict]) -> None:
+    """
+    Merge a list of license config updates into config.json.
+
+    Each entry: { "sku_id": str, "assignable": bool, "custom_name": str | null }
+    """
+    config = load_config()
+    lc: dict = config.get("license_config", {})
+    for e in entries:
+        sku_id = e.get("sku_id", "")
+        if not sku_id:
+            continue
+        lc[sku_id] = {
+            "assignable":   bool(e.get("assignable", False)),
+            "custom_name":  e.get("custom_name") or None,
+        }
+    config["license_config"] = lc
+    save_config(config)

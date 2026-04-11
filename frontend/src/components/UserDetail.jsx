@@ -264,7 +264,7 @@ function ConfirmDialog({ title, children, confirmLabel, danger = false, onConfir
  * Full-screen modal for managing all tenant licenses.
  * Pre-checks currently assigned ones; user can check/uncheck to stage changes.
  */
-function LicenseAssignModal({ currentLicenses, tenantLicenses, tenantLoading, saving, onClose, onApply }) {
+function LicenseAssignModal({ currentLicenses, tenantLicenses, licenseConfig = {}, tenantLoading, saving, onClose, onApply }) {
   const assignedSkuIds = new Set(currentLicenses.map(l => l.sku_id))
 
   // selections: sku_id → true (should be assigned after save)
@@ -274,17 +274,32 @@ function LicenseAssignModal({ currentLicenses, tenantLicenses, tenantLoading, sa
   const [q, setQ] = useState('')
   const [confirming, setConfirming] = useState(false)
 
+  // Apply custom display names from config
+  function resolvedName(lic) {
+    return licenseConfig[lic.sku_id]?.display_name || lic.display_name
+  }
+
+  // A license is visible in the modal if:
+  //   - it is marked assignable in config, OR
+  //   - it is already assigned to the user (so they can uncheck/remove it)
+  const hasConfig = Object.keys(licenseConfig).length > 0
+  const visibleLicenses = (tenantLicenses ?? []).filter(t =>
+    !hasConfig ||                             // no config yet — show everything
+    licenseConfig[t.sku_id]?.assignable ||    // marked assignable
+    assignedSkuIds.has(t.sku_id)              // already assigned — always show
+  )
+
   function toggle(skuId, noSeats) {
     if (noSeats) return
     setSelections(prev => ({ ...prev, [skuId]: !prev[skuId] }))
   }
 
-  const filtered = (tenantLicenses ?? []).filter(t =>
-    !q || t.display_name.toLowerCase().includes(q.toLowerCase()) ||
+  const filtered = visibleLicenses.filter(t =>
+    !q || resolvedName(t).toLowerCase().includes(q.toLowerCase()) ||
           t.sku_part_number.toLowerCase().includes(q.toLowerCase())
   )
 
-  const toAdd    = (tenantLicenses ?? []).filter(t => selections[t.sku_id] && !assignedSkuIds.has(t.sku_id)).map(t => t.sku_id)
+  const toAdd    = visibleLicenses.filter(t => selections[t.sku_id] && !assignedSkuIds.has(t.sku_id)).map(t => t.sku_id)
   const toRemove = currentLicenses.filter(l => !selections[l.sku_id]).map(l => l.sku_id)
   const hasChanges = toAdd.length > 0 || toRemove.length > 0
 
@@ -301,7 +316,10 @@ function LicenseAssignModal({ currentLicenses, tenantLicenses, tenantLoading, sa
         <div className="flex shrink-0 items-center justify-between border-b border-border-subtle px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold text-slate-200">Manage Licenses</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Check to assign · uncheck to remove</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Check to assign · uncheck to remove
+              {hasConfig && <span className="ml-1 text-slate-600">· showing assignable + current</span>}
+            </p>
           </div>
           <button onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-white/5 hover:text-slate-200">
             <X className="h-4 w-4" />
@@ -362,7 +380,7 @@ function LicenseAssignModal({ currentLicenses, tenantLicenses, tenantLoading, sa
                     className="mt-0.5 accent-brand-primary shrink-0 disabled:cursor-not-allowed"
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
+                    <p className="truncate text-sm font-medium text-slate-200">{resolvedName(lic)}</p>
                     <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
                     <p className="mt-0.5 text-xs text-slate-500">
                       <span className={lic.available === 0 ? 'text-warning' : ''}>
@@ -475,23 +493,30 @@ function LicensesTab({ user }) {
   const [markedForRemoval, setMarkedForRemoval] = useState(new Set())
 
   // Modal
-  const [modalOpen, setModalOpen]         = useState(false)
+  const [modalOpen, setModalOpen]           = useState(false)
   const [tenantLicenses, setTenantLicenses] = useState(null)
+  const [licenseConfig, setLicenseConfig]   = useState({}) // {sku_id: LicenseConfigEntry}
   const [tenantLoading, setTenantLoading]   = useState(false)
 
   // Action state
-  const [saving, setSaving]           = useState(false)
-  const [error, setError]             = useState(null)
-  const [success, setSuccess]         = useState(null)
+  const [saving, setSaving]                 = useState(false)
+  const [error, setError]                   = useState(null)
+  const [success, setSuccess]               = useState(null)
   const [confirmUnassign, setConfirmUnassign] = useState(false)
 
   function fetchTenant() {
     setTenantLoading(true)
     const token = getToken()
-    axios
-      .get('/api/v1/entra/licenses', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then(res => setTenantLicenses(res.data))
-      .catch(() => setTenantLicenses([]))
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    Promise.all([
+      axios.get('/api/v1/entra/licenses',          { headers }),
+      axios.get('/api/v1/settings/license-config', { headers }),
+    ])
+      .then(([licRes, cfgRes]) => {
+        setTenantLicenses(licRes.data)
+        setLicenseConfig(Object.fromEntries(cfgRes.data.map(c => [c.sku_id, c])))
+      })
+      .catch(() => { setTenantLicenses([]); setLicenseConfig({}) })
       .finally(() => setTenantLoading(false))
   }
 
@@ -677,6 +702,7 @@ function LicensesTab({ user }) {
         <LicenseAssignModal
           currentLicenses={assigned}
           tenantLicenses={tenantLicenses}
+          licenseConfig={licenseConfig}
           tenantLoading={tenantLoading}
           saving={saving}
           onClose={() => { setModalOpen(false); setError(null) }}
@@ -1313,6 +1339,7 @@ export function LicenseCardList({ entraObjectId, assignedLicenses = [] }) {
   const [modalOpen, setModalOpen]           = useState(false)
   const [confirmUnassign, setConfirmUnassign] = useState(false)
   const [tenantLicenses, setTenantLicenses] = useState(null)
+  const [licenseConfig, setLicenseConfig]   = useState({})
   const [tenantLoading, setTenantLoading]   = useState(false)
   const [saving, setSaving]                 = useState(false)
   const [error, setError]                   = useState(null)
@@ -1321,9 +1348,16 @@ export function LicenseCardList({ entraObjectId, assignedLicenses = [] }) {
   function fetchTenant() {
     setTenantLoading(true)
     const token = getToken()
-    axios.get('/api/v1/entra/licenses', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then(res => setTenantLicenses(res.data))
-      .catch(() => setTenantLicenses([]))
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    Promise.all([
+      axios.get('/api/v1/entra/licenses',          { headers }),
+      axios.get('/api/v1/settings/license-config', { headers }),
+    ])
+      .then(([licRes, cfgRes]) => {
+        setTenantLicenses(licRes.data)
+        setLicenseConfig(Object.fromEntries(cfgRes.data.map(c => [c.sku_id, c])))
+      })
+      .catch(() => { setTenantLicenses([]); setLicenseConfig({}) })
       .finally(() => setTenantLoading(false))
   }
 
@@ -1425,7 +1459,7 @@ export function LicenseCardList({ entraObjectId, assignedLicenses = [] }) {
       )}
       {modalOpen && (
         <LicenseAssignModal currentLicenses={assigned} tenantLicenses={tenantLicenses}
-          tenantLoading={tenantLoading} saving={saving}
+          licenseConfig={licenseConfig} tenantLoading={tenantLoading} saving={saving}
           onClose={() => { setModalOpen(false); setError(null) }} onApply={handleModalApply} />
       )}
     </div>

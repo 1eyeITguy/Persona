@@ -17,14 +17,17 @@ import re
 from fastapi import APIRouter, Depends, HTTPException
 from passlib.context import CryptContext
 from starlette.concurrency import run_in_threadpool
+from typing import List
 
 from backend.app_config import (
     get_entra_settings,
     get_ldap_settings,
+    get_license_config,
     is_entra_configured,
     is_setup_complete,
     load_config,
     save_config,
+    save_license_config,
 )
 from backend.auth.ldap import test_ldap_connection
 from backend.deps import optional_jwt, require_jwt
@@ -33,6 +36,8 @@ from backend.models.schemas import (
     EntraConfigUpdate,
     LDAPSettings,
     LDAPSettingsUpdate,
+    LicenseConfigEntry,
+    LicenseConfigSave,
     SetupRequest,
     SettingsStatusResponse,
     TestConnectionRequest,
@@ -304,3 +309,88 @@ async def update_ldap_config(
     config["ldap_configured"] = True
     save_config(config)
     return {"success": True}
+
+
+# ---------------------------------------------------------------------------
+# License configuration
+# ---------------------------------------------------------------------------
+
+
+@router.get("/license-config", response_model=list[LicenseConfigEntry])
+async def get_license_config_endpoint(
+    _token: dict = Depends(require_jwt),
+) -> list[LicenseConfigEntry]:
+    """
+    Return all tenant licenses merged with stored Persona license configuration.
+
+    Each entry includes:
+      - Live counts (total/assigned/available) from the Graph API
+      - Stored config (assignable flag, optional custom_name)
+      - Effective display_name (custom_name if set, otherwise graph_display_name)
+
+    Returns an empty list if Entra is not configured (Entra is required for counts).
+    JWT required.
+    """
+    entra_cfg = get_entra_settings()
+    stored = get_license_config()
+
+    if entra_cfg is None:
+        # No Entra — return stored config only (no live counts)
+        results = []
+        for sku_id, entry in stored.items():
+            cn = entry.get("custom_name")
+            gn = sku_id  # we don't know the name without Graph
+            results.append(LicenseConfigEntry(
+                sku_id=sku_id,
+                sku_part_number="",
+                graph_display_name=gn,
+                custom_name=cn,
+                display_name=cn or gn,
+                assignable=entry.get("assignable", False),
+            ))
+        return results
+
+    from backend.auth.msal import get_tenant_licenses  # noqa: PLC0415
+    raw = await run_in_threadpool(
+        get_tenant_licenses,
+        entra_cfg["tenant_id"],
+        entra_cfg["client_id"],
+        entra_cfg["client_secret"],
+    )
+
+    results: list[LicenseConfigEntry] = []
+    for lic in raw:
+        sku_id  = lic["sku_id"]
+        cfg_entry = stored.get(sku_id, {})
+        cn = cfg_entry.get("custom_name")
+        gn = lic["display_name"]
+        results.append(LicenseConfigEntry(
+            sku_id=sku_id,
+            sku_part_number=lic["sku_part_number"],
+            graph_display_name=gn,
+            custom_name=cn,
+            display_name=cn or gn,
+            assignable=cfg_entry.get("assignable", False),
+            total=lic["total"],
+            assigned=lic["assigned"],
+            available=lic["available"],
+            capability_status=lic["capability_status"],
+        ))
+    return results
+
+
+@router.put("/license-config")
+async def save_license_config_endpoint(
+    entries: List[LicenseConfigSave],
+    _token: dict = Depends(require_jwt),
+) -> dict:
+    """
+    Save license configuration entries.
+
+    Accepts a list of { sku_id, assignable, custom_name? } objects.
+    Merges into existing config — unlisted SKUs are unchanged.
+    JWT required.
+    """
+    save_license_config([e.model_dump() for e in entries])
+    return {"success": True, "saved": len(entries)}
+
