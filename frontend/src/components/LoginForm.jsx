@@ -59,8 +59,7 @@ export default function LoginForm() {
         <div className="rounded-xl border border-border-subtle bg-surface p-8 shadow-2xl">
           <h1 className="mb-1 text-lg font-semibold text-white">Sign in</h1>
           <p className="mb-6 text-sm text-slate-400">
-            Use your Windows username (e.g. jsmith), or the local admin account
-            if you need to access settings.
+            Use your Windows username (e.g. first.last), or the local admin account
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
@@ -70,9 +69,6 @@ export default function LoginForm() {
                 className="block text-sm font-medium text-slate-300 mb-1"
               >
                 Username
-                <span className="ml-2 font-normal text-slate-500">
-                  Your Windows/AD username
-                </span>
               </label>
               <input
                 id="username"
@@ -115,7 +111,7 @@ export default function LoginForm() {
               className="flex w-full items-center justify-center gap-2 rounded-md bg-brand-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand-primary/80 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              Sign in with Active Directory
+              Sign in
             </button>
           </form>
         </div>
