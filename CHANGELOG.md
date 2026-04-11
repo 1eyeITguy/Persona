@@ -23,6 +23,16 @@ Versioning: [Semantic Versioning](https://semver.org/)
   The guide is expanded by default in the Setup Wizard (first-time setup) and collapsed by default
   in Settings (editing existing config).
 
+### Fixed
+- **Cloud tab — "No cloud identity found" for all synced users** — Graph user lookup now falls back
+  to the user's `mail` attribute when the on-premises UPN returns 404. This handles the common case
+  where on-premises UPNs use a non-routable suffix (e.g. `@company.local`) that doesn't exist in
+  Entra — the cloud UPN is the routable `mail` address instead. Subsequent calls (MFA, licenses,
+  groups, sign-in activity) all use the resolved Entra object ID for stability.
+- **Sign-in activity separated into its own best-effort call** — previously included in the main
+  `$select`, which can cause failures in some environments. Now fetched independently so core profile
+  data always loads.
+
 ### Changed
 - **Entra setup UX simplified** — the "choose" mode selector (auto vs. manual) is gone; clicking
   "Connect" goes directly to the credential form with the guide card inline

@@ -428,7 +428,7 @@ function CloudField({ label, value, mono = false }) {
   )
 }
 
-function CloudTab({ upn, getToken }) {
+function CloudTab({ upn, mail, getToken }) {
   const [data, setData]     = useState(null)
   const [loading, setLoading] = useState(false)
   const [errKind, setErrKind] = useState(null) // 'not_configured' | 'fetch_error' | null
@@ -439,9 +439,11 @@ function CloudTab({ upn, getToken }) {
     setErrKind(null)
     setLoading(true)
     const token = getToken()
+    const params = mail && mail !== upn ? { mail } : {}
     axios
       .get(`/api/v1/entra/users/${encodeURIComponent(upn)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
+        params,
       })
       .then(res => setData(res.data))
       .catch(err => {
@@ -625,7 +627,7 @@ export default function UserDetail({ userDn, onClose, onUserSelect }) {
       case 'member-of':        return <MemberOfTab user={user} />
       case 'object':           return <ObjectTab user={user} />
       case 'attribute-editor': return <AttributeEditorTab rawAttributes={user.raw_attributes} />
-      case 'cloud':            return <CloudTab upn={user.upn} getToken={getToken} />
+      case 'cloud':            return <CloudTab upn={user.upn} mail={user.mail} getToken={getToken} />
       default:                 return null
     }
   }

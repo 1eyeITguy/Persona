@@ -127,6 +127,7 @@ async def delete_entra_config(
 @router.get("/users/{upn:path}", response_model=EntraUserResponse)
 async def get_cloud_user(
     upn: str,
+    mail: str | None = None,
     _token: dict = Depends(require_jwt),
 ) -> EntraUserResponse:
     """
@@ -134,8 +135,12 @@ async def get_cloud_user(
     Used by the Cloud tab in UserDetail.
     JWT required.
 
+    Optional query param ``mail`` is used as a fallback lookup identifier when
+    the UPN returns 404 — handles environments where on-premises UPNs use a
+    non-routable suffix (e.g. @company.local) that doesn't exist in Entra.
+
     Returns 503 if Entra is not configured.
-    Returns found=False when the UPN has no matching Entra account.
+    Returns found=False when neither identifier resolves to an Entra account.
     """
     upn = unquote(upn)
 
@@ -152,6 +157,7 @@ async def get_cloud_user(
         cfg["client_id"],
         cfg["client_secret"],
         upn,
+        mail,
     )
 
     return EntraUserResponse(**result)

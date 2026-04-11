@@ -181,20 +181,25 @@ def get_entra_user(
     client_id: str,
     client_secret: str,
     upn: str,
+    mail: Optional[str] = None,
 ) -> dict:
     """
     Fetch cloud identity data for a user by UPN using client credentials.
 
-    Makes up to 4 Graph API calls:
-      1. User profile + sign-in activity
-      2. Authentication methods (MFA)
-      3. License details
-      4. Group memberships
+    Falls back to looking up by ``mail`` if the UPN returns 404 — handles
+    environments where on-premises UPNs use a non-routable suffix (e.g.
+    @company.local) that doesn't exist in Entra.
+
+    Makes up to 5 Graph API calls:
+      1. User profile (by UPN, then mail fallback if 404)
+      2. Sign-in activity (best-effort — requires AuditLog.Read.All)
+      3. Authentication methods (MFA)
+      4. License details
+      5. Group memberships
 
     Returns a dict matching the EntraUserResponse schema.
     If the user is not found in Entra, returns {"found": False}.
     If authentication fails, returns {"found": False, "error": str}.
-    Sign-in activity requires Entra ID P1/P2 — gracefully returns None when absent.
     """
     authority = f"https://login.microsoftonline.com/{tenant_id}"
     try:
@@ -218,33 +223,60 @@ def get_entra_user(
     headers = {"Authorization": f"Bearer {token}"}
 
     # ── 1. User profile ────────────────────────────────────────────────────
+    # Try UPN first; if not found and mail is available, retry with mail.
+    # This handles on-premises UPN suffixes that don't exist in Entra
+    # (e.g. @company.local synced users whose cloud UPN differs).
+    def _fetch_user_profile(identifier: str) -> tuple[int, dict | None]:
+        """Return (status_code, json_body | None)."""
+        try:
+            r = _requests.get(
+                f"{_GRAPH_BASE}/users/{identifier}",
+                headers=headers,
+                params={"$select": "id,displayName,accountEnabled,userPrincipalName"},
+                timeout=10,
+            )
+            return r.status_code, r.json() if r.ok else None
+        except Exception as exc:
+            logger.warning("Entra profile fetch error for %s: %s", identifier, exc)
+            return 0, None
+
+    status, user_data = _fetch_user_profile(upn)
+    if status == 404 and mail and mail != upn:
+        logger.debug("UPN %s not found in Entra, retrying with mail %s", upn, mail)
+        status, user_data = _fetch_user_profile(mail)
+
+    if status == 0:
+        return {"found": False, "error": "Failed to reach Microsoft Graph."}
+    if status == 404 or user_data is None:
+        return {"found": False}
+    if status >= 400:
+        logger.warning("Entra user fetch returned HTTP %s for %s", status, upn)
+        return {"found": False, "error": f"Graph API returned HTTP {status}."}
+
+    # Use the resolved identifier (object ID) for subsequent calls so all
+    # follow-up requests are stable even when the fallback path was taken.
+    resolved_id: str = user_data.get("id", upn)
+
+    # ── 2. Sign-in activity (requires AuditLog.Read.All — best-effort) ────
+    last_sign_in: str | None = None
     try:
         resp = _requests.get(
-            f"{_GRAPH_BASE}/users/{upn}",
+            f"{_GRAPH_BASE}/users/{resolved_id}",
             headers=headers,
-            params={
-                "$select": "id,displayName,accountEnabled,signInActivity,userPrincipalName"
-            },
+            params={"$select": "signInActivity"},
             timeout=10,
         )
-        if resp.status_code == 404:
-            return {"found": False}
-        resp.raise_for_status()
-        user_data = resp.json()
-    except _requests.HTTPError:
-        return {"found": False, "error": "Failed to fetch user from Entra."}
-    except Exception as exc:
-        logger.warning("Entra user fetch error for %s: %s", upn, exc)
-        return {"found": False, "error": "Failed to reach Microsoft Graph."}
+        if resp.ok:
+            sign_in_activity = resp.json().get("signInActivity") or {}
+            last_sign_in = sign_in_activity.get("lastSignInDateTime")
+    except Exception:
+        pass  # Sign-in activity is best-effort
 
-    sign_in_activity = user_data.get("signInActivity") or {}
-    last_sign_in: str | None = sign_in_activity.get("lastSignInDateTime")
-
-    # ── 2. MFA methods ─────────────────────────────────────────────────────
+    # ── 3. MFA methods ─────────────────────────────────────────────────────
     mfa_methods: list[str] = []
     try:
         resp = _requests.get(
-            f"{_GRAPH_BASE}/users/{upn}/authentication/methods",
+            f"{_GRAPH_BASE}/users/{resolved_id}/authentication/methods",
             headers=headers,
             timeout=10,
         )
@@ -257,7 +289,7 @@ def get_entra_user(
     licenses: list[str] = []
     try:
         resp = _requests.get(
-            f"{_GRAPH_BASE}/users/{upn}/licenseDetails",
+            f"{_GRAPH_BASE}/users/{resolved_id}/licenseDetails",
             headers=headers,
             timeout=10,
         )
@@ -273,7 +305,7 @@ def get_entra_user(
     groups: list[dict] = []
     try:
         resp = _requests.get(
-            f"{_GRAPH_BASE}/users/{upn}/memberOf",
+            f"{_GRAPH_BASE}/users/{resolved_id}/memberOf",
             headers=headers,
             params={
                 "$select": "id,displayName,groupTypes,mailEnabled,securityEnabled"
