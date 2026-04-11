@@ -121,18 +121,18 @@ export default function LicensesPage() {
     })
   }, [licenses, q, sort])
 
-  // Summary totals
+  // Summary totals — reflect only what is currently shown (respects filter + toggle)
   const totals = useMemo(() => {
-    if (!licenses) return null
-    return licenses.reduce(
+    if (!filtered.length) return null
+    return filtered.reduce(
       (acc, l) => ({
-        total:    acc.total    + l.total,
-        assigned: acc.assigned + l.assigned,
-        available:acc.available + l.available,
+        total:     acc.total    + l.total,
+        assigned:  acc.assigned + l.assigned,
+        available: acc.available + l.available,
       }),
       { total: 0, assigned: 0, available: 0 }
     )
-  }, [licenses])
+  }, [filtered])
 
   // ---------------------------------------------------------------------------
   // Render states
