@@ -348,10 +348,73 @@ function MemberOfTab({ user }) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared device card (used by both UserDetail and EntraUserDetailPanel)
+// ---------------------------------------------------------------------------
+
+const COMPLIANCE_STYLES = {
+  compliant:    'border-success/20 bg-success/10 text-success',
+  noncompliant: 'border-danger/20 bg-danger/10 text-danger',
+  unknown:      'border-slate-600/30 bg-slate-700/20 text-slate-400',
+}
+
+export function EntraDeviceCard({ device }) {
+  const complianceCls = COMPLIANCE_STYLES[device.compliance_state?.toLowerCase()] ?? COMPLIANCE_STYLES.unknown
+  const isIntune = device.device_type === 'intune'
+
+  return (
+    <li className="rounded-md border border-border-subtle bg-app-bg/60 px-3 py-2.5 space-y-1">
+      <div className="flex items-center gap-2">
+        <Monitor className="h-4 w-4 shrink-0 text-slate-500" />
+        <p className="flex-1 truncate text-sm font-medium text-slate-200">
+          {device.display_name || 'Unknown device'}
+        </p>
+        {isIntune && device.compliance_state && (
+          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${complianceCls}`}>
+            {device.compliance_state}
+          </span>
+        )}
+        {!isIntune && (
+          <span className="inline-flex items-center rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-300">
+            {device.trust_type ?? 'Registered'}
+          </span>
+        )}
+      </div>
+
+      {(device.operating_system || device.os_version) && (
+        <p className="pl-6 text-xs text-slate-400">
+          {[device.operating_system, device.os_version].filter(Boolean).join(' · ')}
+        </p>
+      )}
+
+      {(device.manufacturer || device.model) && (
+        <p className="pl-6 text-xs text-slate-500">
+          {[device.manufacturer, device.model].filter(Boolean).join(' ')}
+        </p>
+      )}
+
+      {isIntune && device.last_sync_date_time && (
+        <p className="pl-6 text-xs text-slate-600">
+          Last sync: {new Date(device.last_sync_date_time).toLocaleDateString()}
+        </p>
+      )}
+      {!isIntune && device.last_sync_date_time && (
+        <p className="pl-6 text-xs text-slate-600">
+          Last seen: {new Date(device.last_sync_date_time).toLocaleDateString()}
+        </p>
+      )}
+    </li>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Tab: Devices
 // ---------------------------------------------------------------------------
 
-function DevicesTab({ userDn, getToken }) {
+/**
+ * isSynced + entraObjectId — use Entra/Intune as the primary source.
+ * AD-only users fall back to the AD managedBy LDAP query.
+ */
+function DevicesTab({ userDn, isSynced, entraObjectId, getToken }) {
   const [devices, setDevices] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -362,15 +425,45 @@ function DevicesTab({ userDn, getToken }) {
     setError(null)
     setLoading(true)
     const token = getToken()
-    axios
-      .get('/api/v1/ad/user-devices', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        params: { user_dn: userDn },
-      })
-      .then(res => setDevices(res.data))
-      .catch(() => setError('Failed to load device assignments.'))
-      .finally(() => setLoading(false))
-  }, [userDn]) // eslint-disable-line react-hooks/exhaustive-deps
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+
+    if (isSynced && entraObjectId) {
+      // Synced user — fetch Intune + Entra registered devices from Graph
+      axios
+        .get(`/api/v1/entra/users/${encodeURIComponent(entraObjectId)}/devices`, { headers })
+        .then(res => setDevices(res.data))
+        .catch(err => {
+          if (err.response?.status === 503) setError('entra_not_configured')
+          else setError('fetch_error')
+        })
+        .finally(() => setLoading(false))
+    } else {
+      // AD-only — fall back to managedBy LDAP query
+      axios
+        .get('/api/v1/ad/user-devices', { headers, params: { user_dn: userDn } })
+        .then(res => {
+          // Normalise ADComputerSummary → display shape
+          setDevices(res.data.map(d => ({
+            device_id: d.dn,
+            display_name: d.name,
+            device_type: 'ad',
+            operating_system: d.operating_system,
+            os_version: null,
+            model: null,
+            manufacturer: null,
+            compliance_state: null,
+            management_state: d.account_status === 'Enabled' ? 'managed' : 'disabled',
+            enrolled_date_time: null,
+            last_sync_date_time: null,
+            is_managed: d.account_status === 'Enabled',
+            trust_type: null,
+            dns_hostname: d.dns_hostname,
+          })))
+        })
+        .catch(() => setError('fetch_error'))
+        .finally(() => setLoading(false))
+    }
+  }, [userDn, isSynced, entraObjectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (
@@ -381,11 +474,23 @@ function DevicesTab({ userDn, getToken }) {
     )
   }
 
+  if (error === 'entra_not_configured') {
+    return (
+      <div className="rounded-md border border-border-subtle/50 bg-app-bg/60 px-4 py-4">
+        <p className="text-sm text-slate-400">
+          Entra ID is not connected.{' '}
+          <a href="/settings" className="text-brand-primary hover:underline">Go to Settings</a>
+          {' '}to connect.
+        </p>
+      </div>
+    )
+  }
+
   if (error) {
     return (
       <div className="flex items-center gap-2 text-sm text-danger">
         <AlertCircle className="h-4 w-4 shrink-0" />
-        {error}
+        Failed to load devices.
       </div>
     )
   }
@@ -396,35 +501,42 @@ function DevicesTab({ userDn, getToken }) {
     return (
       <div className="rounded-md border border-border-subtle/50 bg-app-bg/60 px-4 py-8 text-center">
         <Monitor className="mx-auto mb-2 h-8 w-8 text-slate-600" />
-        <p className="text-sm text-slate-500">No managed devices found for this user.</p>
-        <p className="mt-1 text-xs text-slate-600">Devices appear here when the user is set as the Managed By contact in AD.</p>
+        <p className="text-sm text-slate-500">No devices found for this user.</p>
+        <p className="mt-1 text-xs text-slate-600">
+          {isSynced
+            ? 'Requires DeviceManagementManagedDevices.Read.All and/or Device.Read.All on the app registration.'
+            : 'Devices appear here when the user is set as Managed By on a computer in AD.'}
+        </p>
       </div>
+    )
+  }
+
+  // AD-only devices use a simpler card layout since they lack Intune fields
+  if (!isSynced) {
+    return (
+      <ul className="space-y-2">
+        {devices.map(d => (
+          <li key={d.device_id} className="rounded-md border border-border-subtle bg-app-bg/60 px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <Monitor className="h-4 w-4 shrink-0 text-slate-500" />
+              <p className="text-sm font-medium text-slate-200">{d.display_name}</p>
+              <span className={`ml-auto inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${
+                d.is_managed ? 'border-success/20 bg-success/10 text-success' : 'border-danger/20 bg-danger/10 text-danger'
+              }`}>
+                {d.is_managed ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+            {d.dns_hostname && <p className="mt-0.5 pl-6 font-mono text-xs text-slate-500">{d.dns_hostname}</p>}
+            {d.operating_system && <p className="mt-0.5 pl-6 text-xs text-slate-500">{d.operating_system}</p>}
+          </li>
+        ))}
+      </ul>
     )
   }
 
   return (
     <ul className="space-y-2">
-      {devices.map(d => (
-        <li key={d.dn} className="rounded-md border border-border-subtle bg-app-bg/60 px-3 py-2.5">
-          <div className="flex items-center gap-2">
-            <Monitor className="h-4 w-4 shrink-0 text-slate-500" />
-            <p className="text-sm font-medium text-slate-200">{d.name}</p>
-            <span className={`ml-auto inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${
-              d.account_status === 'Enabled'
-                ? 'border-success/20 bg-success/10 text-success'
-                : 'border-danger/20 bg-danger/10 text-danger'
-            }`}>
-              {d.account_status}
-            </span>
-          </div>
-          {d.dns_hostname && (
-            <p className="mt-0.5 font-mono text-xs text-slate-500">{d.dns_hostname}</p>
-          )}
-          {d.operating_system && (
-            <p className="mt-0.5 text-xs text-slate-500">{d.operating_system}</p>
-          )}
-        </li>
-      ))}
+      {devices.map(d => <EntraDeviceCard key={d.device_id} device={d} />)}
     </ul>
   )
 }
@@ -598,7 +710,7 @@ export default function UserDetail({ userDn, mode = 'merged', onClose, onUserSel
       case 'contact':      return <ContactTab user={user} />
       case 'organization': return <OrganizationTab user={user} onUserSelect={onUserSelect} />
       case 'member-of':    return <MemberOfTab user={user} />
-      case 'devices':      return <DevicesTab userDn={userDn} getToken={getToken} />
+      case 'devices':      return <DevicesTab userDn={userDn} isSynced={user.is_synced} entraObjectId={user.entra_object_id} getToken={getToken} />
       case 'attributes':   return <AttributesTab user={user} />
       default:             return null
     }

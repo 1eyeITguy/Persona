@@ -397,6 +397,125 @@ def get_entra_user_photo(
     return None
 
 
+def get_entra_user_devices(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    object_id: str,
+) -> list[dict]:
+    """
+    Fetch devices associated with an Entra user, combining:
+      1. Intune managed devices  — GET /users/{id}/managedDevices
+         Requires: DeviceManagementManagedDevices.Read.All
+      2. Entra registered devices — GET /users/{id}/registeredDevices
+         Requires: Device.Read.All
+
+    Results are deduplicated by device ID. Intune entries take precedence
+    (richer data) when the same device appears in both lists.
+
+    Returns a list of dicts matching the EntraDevice schema.
+    Caller MUST use run_in_threadpool.
+    """
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    try:
+        app = msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=authority,
+        )
+        result = app.acquire_token_for_client(
+            scopes=["https://graph.microsoft.com/.default"]
+        )
+    except Exception:
+        return []
+
+    if "access_token" not in result:
+        return []
+
+    token = result["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    devices: dict[str, dict] = {}  # device_id → dict, Intune takes precedence
+
+    # ── 1. Intune managed devices ──────────────────────────────────────────────
+    intune_select = (
+        "id,deviceName,operatingSystem,osVersion,model,manufacturer,"
+        "complianceState,managementState,enrolledDateTime,lastSyncDateTime,"
+        "managedDeviceOwnerType"
+    )
+    try:
+        resp = _requests.get(
+            f"{_GRAPH_BASE}/users/{object_id}/managedDevices",
+            headers=headers,
+            params={"$select": intune_select, "$top": 100},
+            timeout=10,
+        )
+        if resp.ok:
+            for d in resp.json().get("value", []):
+                device_id = d.get("id", "")
+                devices[device_id] = {
+                    "device_id": device_id,
+                    "display_name": d.get("deviceName"),
+                    "device_type": "intune",
+                    "operating_system": d.get("operatingSystem"),
+                    "os_version": d.get("osVersion"),
+                    "model": d.get("model"),
+                    "manufacturer": d.get("manufacturer"),
+                    "compliance_state": d.get("complianceState"),
+                    "management_state": d.get("managementState"),
+                    "enrolled_date_time": d.get("enrolledDateTime"),
+                    "last_sync_date_time": d.get("lastSyncDateTime"),
+                    "is_managed": True,
+                    "trust_type": None,
+                }
+        elif resp.status_code == 403:
+            logger.debug(
+                "DeviceManagementManagedDevices.Read.All not granted — skipping Intune devices for %s",
+                object_id,
+            )
+    except Exception as exc:
+        logger.debug("Intune devices fetch error for %s: %s", object_id, exc)
+
+    # ── 2. Entra registered / joined devices ───────────────────────────────────
+    entra_select = "id,displayName,operatingSystem,operatingSystemVersion,model,manufacturer,trustType,approximateLastSignInDateTime"
+    try:
+        resp = _requests.get(
+            f"{_GRAPH_BASE}/users/{object_id}/registeredDevices",
+            headers=headers,
+            params={"$select": entra_select, "$top": 100},
+            timeout=10,
+        )
+        if resp.ok:
+            for d in resp.json().get("value", []):
+                device_id = d.get("id", "")
+                if device_id in devices:
+                    continue  # Intune record already present — skip
+                devices[device_id] = {
+                    "device_id": device_id,
+                    "display_name": d.get("displayName"),
+                    "device_type": "entra",
+                    "operating_system": d.get("operatingSystem"),
+                    "os_version": d.get("operatingSystemVersion"),
+                    "model": d.get("model"),
+                    "manufacturer": d.get("manufacturer"),
+                    "compliance_state": None,
+                    "management_state": None,
+                    "enrolled_date_time": None,
+                    "last_sync_date_time": d.get("approximateLastSignInDateTime"),
+                    "is_managed": False,
+                    "trust_type": d.get("trustType"),
+                }
+        elif resp.status_code == 403:
+            logger.debug(
+                "Device.Read.All not granted — skipping Entra registered devices for %s",
+                object_id,
+            )
+    except Exception as exc:
+        logger.debug("Entra registered devices fetch error for %s: %s", object_id, exc)
+
+    return sorted(devices.values(), key=lambda d: (d.get("display_name") or "").lower())
+
+
 def get_entra_only_users(
     tenant_id: str,
     client_id: str,

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { X, Loader2, AlertCircle } from 'lucide-react'
+import { X, Loader2, AlertCircle, Monitor } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 import { getInitials, formatDate } from '../utils.js'
+import { EntraDeviceCard } from './UserDetail.jsx'
 
 // ---------------------------------------------------------------------------
 // Shared helpers (local to this component)
@@ -65,6 +66,7 @@ const TABS = [
   { id: 'identity',  label: 'Identity' },
   { id: 'contact',   label: 'Contact' },
   { id: 'member-of', label: 'Member Of' },
+  { id: 'devices',   label: 'Devices' },
 ]
 
 // ---------------------------------------------------------------------------
@@ -111,6 +113,9 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
   const [activeTab, setActiveTab] = useState('identity')
   const [photoError, setPhotoError] = useState(false)
   const [photo, setPhoto] = useState(null)
+  const [devices, setDevices] = useState(null)
+  const [devicesLoading, setDevicesLoading] = useState(false)
+  const [devicesError, setDevicesError] = useState(null)
 
   useEffect(() => {
     if (!selectedUser?.upn) return
@@ -150,6 +155,32 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
       })
       .finally(() => setLoading(false))
   }, [selectedUser?.upn]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Lazy-load devices when that tab is first opened
+  useEffect(() => {
+    if (activeTab !== 'devices') return
+    const objectId = data?.entra_object_id || selectedUser?.entra_object_id
+    if (!objectId || devices !== null) return  // already fetched or no ID yet
+    setDevicesLoading(true)
+    setDevicesError(null)
+    const token = getToken()
+    axios
+      .get(`/api/v1/entra/users/${encodeURIComponent(objectId)}/devices`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      .then(res => setDevices(res.data))
+      .catch(err => {
+        if (err.response?.status === 503) setDevicesError('entra_not_configured')
+        else setDevicesError('fetch_error')
+      })
+      .finally(() => setDevicesLoading(false))
+  }, [activeTab, data, selectedUser, devices]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset devices when user changes
+  useEffect(() => {
+    setDevices(null)
+    setDevicesError(null)
+  }, [selectedUser?.upn])
 
   if (!selectedUser) return null
 
@@ -214,6 +245,52 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
               ))}
             </ul>
           </div>
+        )
+
+      case 'devices':
+        if (devicesLoading) {
+          return (
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading devices...
+            </div>
+          )
+        }
+        if (devicesError === 'entra_not_configured') {
+          return (
+            <div className="rounded-md border border-border-subtle/50 bg-app-bg/60 px-4 py-4">
+              <p className="text-sm text-slate-400">
+                Entra ID is not connected.{' '}
+                <a href="/settings" className="text-brand-primary hover:underline">Go to Settings</a>
+                {' '}to connect.
+              </p>
+            </div>
+          )
+        }
+        if (devicesError) {
+          return (
+            <div className="flex items-center gap-2 text-sm text-danger">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              Failed to load devices.
+            </div>
+          )
+        }
+        if (!devices) return null
+        if (!devices.length) {
+          return (
+            <div className="rounded-md border border-border-subtle/50 bg-app-bg/60 px-4 py-8 text-center">
+              <Monitor className="mx-auto mb-2 h-8 w-8 text-slate-600" />
+              <p className="text-sm text-slate-500">No devices found for this user.</p>
+              <p className="mt-1 text-xs text-slate-600">
+                Requires DeviceManagementManagedDevices.Read.All and/or Device.Read.All on the app registration.
+              </p>
+            </div>
+          )
+        }
+        return (
+          <ul className="space-y-2">
+            {devices.map(d => <EntraDeviceCard key={d.device_id} device={d} />)}
+          </ul>
         )
 
       default: return null

@@ -29,6 +29,7 @@ from backend.app_config import (
 from backend.auth.msal import (
     get_entra_only_users,
     get_entra_user,
+    get_entra_user_devices,
     get_entra_user_photo,
     test_entra_connection as _test_entra,
 )
@@ -36,6 +37,7 @@ from backend.deps import require_jwt
 from backend.models.schemas import (
     EntraConfigResponse,
     EntraConfigUpdate,
+    EntraDevice,
     EntraOnlyUser,
     EntraUserResponse,
     TestEntraConnectionResponse,
@@ -171,6 +173,37 @@ async def get_cloud_only_users(
         results = [u for u in results if u.get("account_enabled") is False]
 
     return [EntraOnlyUser(**u) for u in results]
+
+
+@router.get("/users/{object_id}/devices", response_model=list[EntraDevice])
+async def get_user_devices(
+    object_id: str,
+    _token: dict = Depends(require_jwt),
+) -> list[EntraDevice]:
+    """
+    Return Intune managed devices and Entra registered devices for a user by Entra object ID.
+
+    Combines results from:
+      - /users/{id}/managedDevices  (Intune — requires DeviceManagementManagedDevices.Read.All)
+      - /users/{id}/registeredDevices (Entra — requires Device.Read.All)
+
+    Intune entries take precedence when the same device appears in both lists.
+    Returns 503 if Entra is not configured. Returns an empty list if neither
+    permission is granted rather than erroring out.
+    JWT required.
+    """
+    cfg = get_entra_settings()
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="Entra ID is not configured.")
+
+    raw = await run_in_threadpool(
+        get_entra_user_devices,
+        cfg["tenant_id"],
+        cfg["client_id"],
+        cfg["client_secret"],
+        object_id,
+    )
+    return [EntraDevice(**d) for d in raw]
 
 
 @router.get("/users/{object_id}/photo")

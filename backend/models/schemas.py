@@ -220,6 +220,27 @@ class EntraUserResponse(BaseModel):
     groups: list[EntraGroupRef] = Field(default_factory=list)
 
 
+class EntraDevice(BaseModel):
+    """
+    A device associated with an Entra/Intune user.
+    Returned by GET /api/v1/entra/users/{object_id}/devices.
+    """
+
+    device_id: str                          # Entra device object ID or Intune device ID
+    display_name: Optional[str] = None
+    device_type: str = "intune"             # "intune" | "entra"
+    operating_system: Optional[str] = None
+    os_version: Optional[str] = None
+    model: Optional[str] = None
+    manufacturer: Optional[str] = None
+    compliance_state: Optional[str] = None  # "compliant" | "noncompliant" | "unknown" (Intune only)
+    management_state: Optional[str] = None  # "managed" | "retirePending" etc. (Intune only)
+    enrolled_date_time: Optional[str] = None   # ISO 8601
+    last_sync_date_time: Optional[str] = None  # ISO 8601
+    is_managed: bool = True
+    trust_type: Optional[str] = None        # "AzureAd" | "Workplace" | "ServerAd" (Entra only)
+
+
 class EntraOnlyUser(BaseModel):
     """
     A cloud-only Entra user with no AD counterpart (onPremisesSyncEnabled is null/false).
