@@ -220,6 +220,28 @@ class EntraUserResponse(BaseModel):
     groups: list[EntraGroupRef] = Field(default_factory=list)
 
 
+class EntraOnlyUser(BaseModel):
+    """
+    A cloud-only Entra user with no AD counterpart (onPremisesSyncEnabled is null/false).
+    Returned by GET /api/v1/entra/users-cloud-only.
+    """
+
+    entra_object_id: str
+    upn: str
+    display_name: Optional[str] = None
+    given_name: Optional[str] = None
+    surname: Optional[str] = None
+    mail: Optional[str] = None
+    title: Optional[str] = None
+    department: Optional[str] = None
+    account_enabled: bool = True
+    last_sign_in: Optional[str] = None
+    mfa_methods: list[str] = Field(default_factory=list)
+    licenses: list[str] = Field(default_factory=list)
+    groups: list[EntraGroupRef] = Field(default_factory=list)
+    photo: Optional[str] = None  # base64 data URL from Graph /photo/$value
+
+
 # ---------------------------------------------------------------------------
 # AD models
 # ---------------------------------------------------------------------------
@@ -233,6 +255,8 @@ class ADNode(BaseModel):
     type: str  # "ou" | "container" | "user"
     has_children: bool
     photo: Optional[str] = None  # base64 data URL; only set for user nodes that have a thumbnailPhoto
+    is_synced: Optional[bool] = None   # True=synced to Entra, False=AD-only, None=unknown
+    entra_object_id: Optional[str] = None  # msDS-ExternalDirectoryObjectId value
 
 
 class ADTreeResponse(BaseModel):
@@ -335,6 +359,18 @@ class ADUser(BaseModel):
     # Graph API (Entra).  None when no photo is stored.
     photo: Optional[str] = None
 
+    # ---- Sync / hybrid identity ----
+    is_synced: bool = False                # True when msDS-ExternalDirectoryObjectId is set
+    entra_object_id: Optional[str] = None  # msDS-ExternalDirectoryObjectId
+
+    # ---- Merged Entra data (only populated for synced users via /merged endpoint) ----
+    entra_last_sign_in: Optional[str] = None
+    entra_account_enabled: Optional[bool] = None
+    entra_mfa_methods: list[str] = Field(default_factory=list)
+    entra_licenses: list[str] = Field(default_factory=list)
+    entra_cloud_groups: list[EntraGroupRef] = Field(default_factory=list)
+    entra_photo: Optional[str] = None  # base64 data URL from Graph /photo/$value
+
     # ---- Attribute Editor ----
     # All LDAP attributes serialized to strings, sorted by name.
     raw_attributes: dict[str, Any] = Field(default_factory=dict)
@@ -352,6 +388,8 @@ class ADUserSummary(BaseModel):
     mail: Optional[str] = None
     account_status: str = "Enabled"        # "Enabled" | "Disabled" | "Locked Out"
     photo: Optional[str] = None            # base64 data URL from thumbnailPhoto
+    is_synced: bool = False
+    entra_object_id: Optional[str] = None
 
 
 class FilterOptions(BaseModel):

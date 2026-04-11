@@ -49,9 +49,12 @@ const DEVICE_FORM = {
 
 export default function SearchBar({ onResults, onClear, isActive, mode = 'users' }) {
   const { getToken } = useAuth()
-  const { options }  = useFilterOptions(getToken, mode)
+  // synced/ad-only use the same filter options as users
+  const filterMode = mode === 'devices' ? 'devices' : 'users'
+  const { options }  = useFilterOptions(getToken, filterMode)
 
-  const initialForm = mode === 'devices' ? DEVICE_FORM : USER_FORM
+  const isDevices = mode === 'devices'
+  const initialForm = isDevices ? DEVICE_FORM : USER_FORM
   const [form, setForm]         = useState(initialForm)
   const [showMore, setShowMore] = useState(false)
   const [loading, setLoading]   = useState(false)
@@ -69,7 +72,7 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
       const params = {}
       if (form.q.trim()) params.q = form.q.trim()
 
-      if (mode === 'devices') {
+      if (isDevices) {
         if (form.operatingSystem) params.operating_system = form.operatingSystem
         if (form.accountStatus)   params.account_status   = form.accountStatus
         if (form.lastLogon)       params.last_logon        = form.lastLogon
@@ -83,9 +86,12 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
         if (form.groupDn)       params.group_dn             = form.groupDn
         if (form.lastLogon)     params.last_logon           = form.lastLogon
         if (form.ouDn)          params.ou_dn                = form.ouDn
+        // Sync filter — limits results to synced or AD-only users
+        if (mode === 'synced')   params.sync_filter = 'synced'
+        if (mode === 'ad-only')  params.sync_filter = 'ad-only'
       }
 
-      const endpoint = mode === 'devices' ? '/api/v1/ad/device-search' : '/api/v1/ad/search'
+      const endpoint = isDevices ? '/api/v1/ad/device-search' : '/api/v1/ad/search'
       const token    = getToken()
       const res = await axios.get(endpoint, {
         params,
@@ -105,7 +111,7 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
     onClear()
   }
 
-  const moreActive = mode !== 'devices' &&
+  const moreActive = !isDevices &&
     (form.mustChangePwd || form.accountExpiry || form.groupDn || form.lastLogon || form.ouDn)
 
   const moreCount = [form.mustChangePwd, form.accountExpiry, form.groupDn, form.lastLogon, form.ouDn]
@@ -121,7 +127,7 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
           {/* Name / username / hostname */}
           <div className="flex flex-col gap-1 flex-1 min-w-48">
             <label className="text-xs font-medium text-slate-500">
-              {mode === 'devices' ? 'Name or hostname' : 'Name or username'}
+              {isDevices ? 'Name or hostname' : 'Name or username'}
             </label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
@@ -136,7 +142,7 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
           </div>
 
           {/* Users-only core filters */}
-          {mode !== 'devices' && (
+          {!isDevices && (
             <>
               <FilterSelect
                 label="Department"
@@ -154,7 +160,7 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
           )}
 
           {/* Devices-only core filters */}
-          {mode === 'devices' && (
+          {isDevices && (
             <>
               <FilterSelect
                 label="Operating system"
@@ -189,7 +195,7 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
             value={form.accountStatus}
             onChange={v => set('accountStatus', v)}
             options={
-              mode === 'devices'
+              isDevices
                 ? [{ dn: 'enabled', name: 'Enabled' }, { dn: 'disabled', name: 'Disabled' }]
                 : [
                     { dn: 'enabled',  name: 'Enabled'    },
@@ -203,7 +209,7 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
           <div className="flex-1" />
 
           {/* More filters toggle (users only) */}
-          {mode !== 'devices' && (
+          {!isDevices && (
             <button
               type="button"
               onClick={() => setShowMore(v => !v)}
@@ -247,7 +253,7 @@ export default function SearchBar({ onResults, onClear, isActive, mode = 'users'
         </div>
 
         {/* ── Expanded more filters (users only) ── */}
-        {mode !== 'devices' && showMore && (
+        {!isDevices && showMore && (
           <div className="flex flex-wrap items-end gap-3 pt-1 border-t border-border-subtle">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-500">Password</label>

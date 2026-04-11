@@ -506,19 +506,21 @@ def test_ldap_connection(settings: LDAPSettings) -> TestConnectionResponse:
     )
 
 
-def query_tree(dn: str, mode: str = "users") -> list[dict]:
+def query_tree(dn: str, mode: str = "users", sync_filter: Optional[str] = None) -> list[dict]:
     """
     Return one level of children for the given DN.
 
     Each child is a dict:
-        { dn, name, type: "ou"|"container"|"user"|"computer", has_children: bool }
+        { dn, name, type: "ou"|"container"|"user"|"computer", has_children: bool,
+          photo, is_synced, entra_object_id }
 
-    mode "users"   — includes user objects (objectCategory=person).
-                     OUs/containers are hidden when they contain no user objects
-                     anywhere in their subtree.
-    mode "devices" — includes computer objects.
-                     OUs/containers are hidden when they contain no computer objects
-                     anywhere in their subtree.
+    mode "users"        — all user objects (objectCategory=person).
+    mode "synced-users" — all user objects; is_synced/entra_object_id populated.
+    mode "ad-only"      — only users without msDS-ExternalDirectoryObjectId.
+    mode "devices"      — computer objects only.
+
+    sync_filter "synced"  — filter leaf users to only synced ones (msDS-ExternalDirectoryObjectId=*).
+    sync_filter "ad-only" — filter leaf users to only AD-only ones.
 
     Sorted: OUs and containers first (alphabetical), then leaf nodes (alphabetical).
     has_children is always False for leaf nodes (users / computers).
@@ -526,6 +528,10 @@ def query_tree(dn: str, mode: str = "users") -> list[dict]:
     Caller MUST use run_in_threadpool.
     """
     conn = get_service_connection()
+
+    # Determine effective sync filter from mode if not explicitly provided
+    if sync_filter is None and mode == "ad-only":
+        sync_filter = "ad-only"
 
     if mode == "devices":
         leaf_filter = "(objectClass=computer)"
@@ -536,14 +542,20 @@ def query_tree(dn: str, mode: str = "users") -> list[dict]:
             "(objectClass=computer)"
             ")"
         )
-    else:  # "users" (default)
+    else:  # "users", "synced-users", "ad-only"
         # objectCategory=person excludes computer accounts, which inherit objectClass=user
-        leaf_filter = "(&(objectClass=user)(objectCategory=person))"
+        base_user_filter = "(&(objectClass=user)(objectCategory=person))"
+        if sync_filter == "synced":
+            leaf_filter = "(&(objectClass=user)(objectCategory=person)(msDS-ExternalDirectoryObjectId=*))"
+        elif sync_filter == "ad-only":
+            leaf_filter = "(&(objectClass=user)(objectCategory=person)(!(msDS-ExternalDirectoryObjectId=*)))"
+        else:
+            leaf_filter = base_user_filter
         tree_filter = (
             "(|"
             "(objectClass=organizationalUnit)"
             "(objectClass=container)"
-            "(&(objectClass=user)(objectCategory=person))"
+            f"{leaf_filter}"
             ")"
         )
 
@@ -551,7 +563,8 @@ def query_tree(dn: str, mode: str = "users") -> list[dict]:
         search_base=dn,
         search_filter=tree_filter,
         search_scope=LEVEL,
-        attributes=["objectClass", "name", "distinguishedName", "thumbnailPhoto"],
+        attributes=["objectClass", "name", "distinguishedName", "thumbnailPhoto",
+                    "msDS-ExternalDirectoryObjectId"],
     )
 
     raw_entries = list(conn.entries)  # snapshot before subsequent searches
@@ -589,6 +602,8 @@ def query_tree(dn: str, mode: str = "users") -> list[dict]:
             has_children = True  # at least one descendant exists → show chevron
 
         photo: str | None = None
+        is_synced: Optional[bool] = None
+        entra_object_id: Optional[str] = None
         if node_type == "user":
             try:
                 photo_raw = entry["thumbnailPhoto"].value
@@ -596,6 +611,16 @@ def query_tree(dn: str, mode: str = "users") -> list[dict]:
                     photo = _photo_data_url(bytes(photo_raw))
             except Exception:
                 pass
+            # Sync detection via msDS-ExternalDirectoryObjectId
+            try:
+                oid_val = entry["msDS-ExternalDirectoryObjectId"].value
+                if oid_val:
+                    entra_object_id = str(oid_val)
+                    is_synced = True
+                else:
+                    is_synced = False
+            except Exception:
+                is_synced = False
 
         results.append(
             {
@@ -604,6 +629,8 @@ def query_tree(dn: str, mode: str = "users") -> list[dict]:
                 "type": node_type,
                 "has_children": has_children,
                 "photo": photo,
+                "is_synced": is_synced,
+                "entra_object_id": entra_object_id,
             }
         )
 
@@ -756,6 +783,11 @@ def query_user(dn: str) -> ADUser:
     except Exception:
         pass
 
+    # ---- Sync detection via msDS-ExternalDirectoryObjectId ----
+    entra_oid_raw = _str(e, "msDS-ExternalDirectoryObjectId")
+    is_synced = bool(entra_oid_raw)
+    entra_object_id: Optional[str] = entra_oid_raw if entra_oid_raw else None
+
     # ---- Raw attributes for Attribute Editor ----
     raw_attributes = _serialize_raw(e)
 
@@ -820,6 +852,9 @@ def query_user(dn: str) -> ADUser:
         when_changed=when_changed,
         # Photo
         photo=photo,
+        # Sync / hybrid identity
+        is_synced=is_synced,
+        entra_object_id=entra_object_id,
         # Attribute Editor
         raw_attributes=raw_attributes,
     )
@@ -842,6 +877,7 @@ def search_users(
     group_dn: Optional[str] = None,
     last_logon: Optional[str] = None,
     ou_dn: Optional[str] = None,
+    sync_filter: Optional[str] = None,
 ) -> list[ADUserSummary]:
     """
     Search users across the directory with optional filters.
@@ -912,6 +948,11 @@ def search_users(
         # Include users who never logged on OR last logged on before the cutoff
         clauses.append(f"(|(!(lastLogonTimestamp=*))(lastLogonTimestamp<={cutoff_ft}))")
 
+    if sync_filter == "synced":
+        clauses.append("(msDS-ExternalDirectoryObjectId=*)")
+    elif sync_filter == "ad-only":
+        clauses.append("(!(msDS-ExternalDirectoryObjectId=*))")
+
     ldap_filter = "(&" + "".join(clauses) + ")"
     search_base = ou_dn if ou_dn else cfg.base_dn
 
@@ -929,6 +970,7 @@ def search_users(
             "userAccountControl",
             "lockoutTime",
             "thumbnailPhoto",
+            "msDS-ExternalDirectoryObjectId",
         ],
         size_limit=500,
     )
@@ -945,6 +987,7 @@ def search_users(
                 photo = _photo_data_url(bytes(photo_raw))
         except Exception:
             pass
+        oid_raw = _str(e, "msDS-ExternalDirectoryObjectId")
         results.append(
             ADUserSummary(
                 dn=e.entry_dn,
@@ -956,6 +999,8 @@ def search_users(
                 mail=_str(e, "mail"),
                 account_status=status,
                 photo=photo,
+                is_synced=bool(oid_raw),
+                entra_object_id=oid_raw if oid_raw else None,
             )
         )
 
@@ -1231,6 +1276,53 @@ def search_computers(
     results: list[ADComputerSummary] = []
     for e in conn.entries:
         uac    = _int(e, "userAccountControl")
+        status = "Disabled" if (uac is not None and uac & 0x0002) else "Enabled"
+        results.append(
+            ADComputerSummary(
+                dn=e.entry_dn,
+                name=_str(e, "name") or _str(e, "cn") or "",
+                dns_hostname=_str(e, "dNSHostName"),
+                operating_system=_str(e, "operatingSystem"),
+                description=_str(e, "description"),
+                account_status=status,
+            )
+        )
+
+    conn.unbind()
+    return sorted(results, key=lambda c: c.name.lower())
+
+
+def query_user_devices(user_dn: str) -> list[ADComputerSummary]:
+    """
+    Return a list of computer objects where managedBy = user_dn.
+
+    Used by the Devices tab in the user detail panel to show computers
+    explicitly assigned to the user via ADUC's Managed By field.
+
+    Returns up to 100 results sorted alphabetically.
+    Caller MUST use run_in_threadpool.
+    """
+    cfg = _load_ldap_settings()
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="LDAP not configured")
+
+    conn = get_service_connection()
+
+    safe_dn = escape_filter_chars(user_dn)
+    conn.search(
+        search_base=cfg.base_dn,
+        search_filter=f"(&(objectClass=computer)(managedBy={safe_dn}))",
+        search_scope=SUBTREE,
+        attributes=[
+            "cn", "name", "dNSHostName", "operatingSystem",
+            "description", "userAccountControl", "lastLogonTimestamp",
+        ],
+        size_limit=100,
+    )
+
+    results: list[ADComputerSummary] = []
+    for e in conn.entries:
+        uac = _int(e, "userAccountControl")
         status = "Disabled" if (uac is not None and uac & 0x0002) else "Enabled"
         results.append(
             ADComputerSummary(

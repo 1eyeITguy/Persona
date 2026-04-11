@@ -5,6 +5,41 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
+## [Unreleased] — Identity Navigation Redesign
+
+### Added
+- **Identity navigation section** — "AD Directory" renamed to "Identity" with three sub-items:
+  - **Synced Users** (`/identity/synced`) — OU tree showing all AD users with `[S]`/`[AD]` sync badges
+  - **AD Only** (`/identity/ad-only`) — OU tree filtered to users with no Entra counterpart
+  - **Entra Only** (`/identity/entra`) — flat sortable/searchable list of cloud-only Entra users
+- **Sync detection** — all AD user queries now fetch `msDS-ExternalDirectoryObjectId`; users are classified as synced (`is_synced=true`) when the attribute is set by Entra Connect / Cloud Sync
+- **Merged user detail panel** — `UserDetail` completely rewritten with 7 help-desk-focused tabs:
+  - **Identity**: UPN, SAM, Entra Object ID, Last Sign-in, MFA methods (badges), Licenses (badges)
+  - **Account**: password flags, lockout, expiry, UAC flags, logon activity
+  - **Contact**: email, phone, mobile, office, full address, profile paths
+  - **Organization**: title, dept, company, clickable manager + direct reports
+  - **Member Of**: two-column layout for synced users — on-prem AD groups (left) and Entra cloud groups with type badges (right)
+  - **Devices**: computers assigned to the user via AD `managedBy` attribute
+  - **Attributes**: raw LDAP attribute editor with collapsible object metadata (DN, SID, GUID, USN)
+- **Entra photo in header** — synced users and cloud-only users show their Microsoft 365 profile photo (from Graph API); AD-only users show their AD `thumbnailPhoto`
+- **Dual status badges** — synced user header shows both AD account status and Entra account state
+- **`GET /api/v1/ad/user/{dn}/merged`** — new endpoint that fetches AD attributes then merges Entra data (sign-in, MFA, licenses, cloud groups, photo) for synced users in a single response
+- **`GET /api/v1/entra/users-cloud-only`** — lists Entra-only users (onPremisesSyncEnabled=null) with name/department/status filtering
+- **`GET /api/v1/entra/users/{object_id}/photo`** — returns Entra profile photo as image bytes
+- **`GET /api/v1/ad/user-devices`** — returns computers where `managedBy` equals a given user DN
+- **`sync_filter` query param** on `/api/v1/ad/search` and tree endpoints — filter results to `synced` or `ad-only` users
+- **`EntraOnlyList`** component — paginated list with debounced search, sort, and status filters
+- **`EntraUserDetailPanel`** component — cloud user detail with Identity, Contact, and Member Of tabs
+
+### Changed
+- **Navigation**: Devices nav item temporarily removed (will return as its own top-level section)
+- `/users` and `/devices` routes now redirect to `/identity/synced`
+- `ADNode`, `ADUser`, `ADUserSummary` schemas extended with `is_synced` and `entra_object_id` fields
+- `ADUser` schema extended with optional merged Entra fields (`entra_photo`, `entra_mfa_methods`, `entra_licenses`, `entra_cloud_groups`, `entra_last_sign_in`, `entra_account_enabled`)
+- `SearchBar` supports `mode='synced'` and `mode='ad-only'` in addition to existing `users` and `devices`
+
+---
+
 ## [0.3.1-alpha] — dev branch (Phase 2 in progress)
 
 ### Removed

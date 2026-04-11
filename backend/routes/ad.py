@@ -29,6 +29,7 @@ from backend.auth.ldap import (
     query_computer,
     query_tree,
     query_user,
+    query_user_devices,
     search_computers,
     search_users,
 )
@@ -56,13 +57,16 @@ def _require_ldap() -> None:
 @router.get("/tree", response_model=ADTreeResponse)
 async def get_tree(
     dn: str | None = Query(default=None, description="DN to list; defaults to base_dn"),
-    mode: str = Query(default="users", description="users | devices"),
+    mode: str = Query(default="users", description="users | synced-users | ad-only | devices"),
     _token: dict = Depends(require_jwt),
 ) -> ADTreeResponse:
     """
     Return one level of the directory tree for the given DN.
     Falls back to base_dn when no dn query parameter is supplied.
     OUs/containers containing no objects of the requested mode are omitted.
+
+    mode "synced-users" — all users; is_synced/entra_object_id populated.
+    mode "ad-only"      — only users without an Entra counterpart.
     """
     _require_ldap()
     cfg = get_ldap_settings()
@@ -77,7 +81,7 @@ async def get_tree(
 @router.get("/ou/{encoded_dn}/children", response_model=list[ADNode])
 async def get_ou_children(
     encoded_dn: str,
-    mode: str = Query(default="users", description="users | devices"),
+    mode: str = Query(default="users", description="users | synced-users | ad-only | devices"),
     _token: dict = Depends(require_jwt),
 ) -> list[ADNode]:
     """
@@ -102,11 +106,15 @@ async def search_users_endpoint(
     group_dn: str | None = Query(default=None, description="Require recursive membership in this group DN"),
     last_logon: str | None = Query(default=None, description="never | 30 | 90 | 180 (days)"),
     ou_dn: str | None = Query(default=None, description="Scope search to this OU DN"),
+    sync_filter: str | None = Query(default=None, description="synced | ad-only"),
     _token: dict = Depends(require_jwt),
 ) -> list[ADUserSummary]:
     """
     Search AD users with optional filters.  Returns up to 500 results sorted
     alphabetically.  All parameters are optional — omitting all returns every user.
+
+    sync_filter "synced"  — only users synced to Entra (msDS-ExternalDirectoryObjectId set).
+    sync_filter "ad-only" — only users with no Entra counterpart.
     """
     _require_ldap()
     return await run_in_threadpool(
@@ -120,6 +128,7 @@ async def search_users_endpoint(
         group_dn=group_dn,
         last_logon=last_logon,
         ou_dn=ou_dn,
+        sync_filter=sync_filter,
     )
 
 
@@ -182,6 +191,77 @@ async def get_computer(
     _require_ldap()
     dn = unquote(encoded_dn)
     return await run_in_threadpool(query_computer, dn)
+
+
+@router.get("/user-devices", response_model=list[ADComputerSummary])
+async def get_user_devices(
+    user_dn: str = Query(..., description="DN of the user to find devices for"),
+    _token: dict = Depends(require_jwt),
+) -> list[ADComputerSummary]:
+    """
+    Return computer objects where managedBy = user_dn.
+    Used by the Devices tab in the user detail panel.
+    """
+    _require_ldap()
+    return await run_in_threadpool(query_user_devices, user_dn)
+
+
+@router.get("/user/{encoded_dn}/merged", response_model=ADUser)
+async def get_user_merged(
+    encoded_dn: str,
+    _token: dict = Depends(require_jwt),
+) -> ADUser:
+    """
+    Return a fully populated ADUser with Entra data merged in for synced users.
+    If the user is synced and Entra is configured, makes Graph API calls to fetch
+    last sign-in, MFA methods, licenses, cloud groups, and profile photo.
+    Falls back to plain AD data when Entra is not configured or the user is AD-only.
+    """
+    _require_ldap()
+    dn = unquote(encoded_dn)
+    user = await run_in_threadpool(query_user, dn)
+
+    if user.is_synced:
+        from backend.app_config import get_entra_settings  # type: ignore
+        from backend.auth.msal import get_entra_user, get_entra_user_photo  # type: ignore
+        from backend.models.schemas import EntraGroupRef  # type: ignore
+
+        entra_cfg = get_entra_settings()
+        if entra_cfg:
+            try:
+                entra_data = await run_in_threadpool(
+                    get_entra_user,
+                    entra_cfg["tenant_id"],
+                    entra_cfg["client_id"],
+                    entra_cfg["client_secret"],
+                    user.upn,
+                    user.mail,
+                )
+                if entra_data.get("found"):
+                    obj_id = entra_data.get("entra_object_id") or user.entra_object_id
+                    entra_photo: str | None = None
+                    if obj_id:
+                        entra_photo = await run_in_threadpool(
+                            get_entra_user_photo,
+                            entra_cfg["tenant_id"],
+                            entra_cfg["client_id"],
+                            entra_cfg["client_secret"],
+                            obj_id,
+                        )
+                    user = user.model_copy(update={
+                        "entra_last_sign_in": entra_data.get("last_sign_in"),
+                        "entra_account_enabled": entra_data.get("account_enabled"),
+                        "entra_mfa_methods": entra_data.get("mfa_methods", []),
+                        "entra_licenses": entra_data.get("licenses", []),
+                        "entra_cloud_groups": [
+                            EntraGroupRef(**g) for g in entra_data.get("groups", [])
+                        ],
+                        "entra_photo": entra_photo,
+                    })
+            except Exception:
+                pass  # Entra unavailable — return plain AD data
+
+    return user
 
 
 @router.get("/user/{encoded_dn}", response_model=ADUser)

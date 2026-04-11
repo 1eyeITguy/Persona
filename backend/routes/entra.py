@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from starlette.concurrency import run_in_threadpool
 
 from backend.app_config import (
@@ -27,13 +27,16 @@ from backend.app_config import (
     save_config,
 )
 from backend.auth.msal import (
+    get_entra_only_users,
     get_entra_user,
+    get_entra_user_photo,
     test_entra_connection as _test_entra,
 )
 from backend.deps import require_jwt
 from backend.models.schemas import (
     EntraConfigResponse,
     EntraConfigUpdate,
+    EntraOnlyUser,
     EntraUserResponse,
     TestEntraConnectionResponse,
 )
@@ -122,6 +125,88 @@ async def delete_entra_config(
 # ---------------------------------------------------------------------------
 # Cloud user data
 # ---------------------------------------------------------------------------
+
+
+@router.get("/users-cloud-only", response_model=list[EntraOnlyUser])
+async def get_cloud_only_users(
+    q: str | None = Query(default=None, description="Display name or UPN substring"),
+    department: str | None = Query(default=None),
+    account_status: str | None = Query(default=None, description="enabled | disabled"),
+    _token: dict = Depends(require_jwt),
+) -> list[EntraOnlyUser]:
+    """
+    Return all Entra-only users (no AD counterpart, onPremisesSyncEnabled is null).
+    Supports optional filtering by name/UPN, department, and account status.
+    Returns 503 if Entra is not configured.
+    JWT required.
+    """
+    cfg = get_entra_settings()
+    if cfg is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Entra ID is not configured. Connect it in Settings first.",
+        )
+
+    raw = await run_in_threadpool(
+        get_entra_only_users,
+        cfg["tenant_id"],
+        cfg["client_id"],
+        cfg["client_secret"],
+    )
+
+    # Python-side filtering
+    results = raw
+    if q:
+        q_lower = q.lower()
+        results = [
+            u for u in results
+            if q_lower in (u.get("display_name") or "").lower()
+            or q_lower in (u.get("upn") or "").lower()
+        ]
+    if department:
+        results = [u for u in results if u.get("department") == department]
+    if account_status == "enabled":
+        results = [u for u in results if u.get("account_enabled") is True]
+    elif account_status == "disabled":
+        results = [u for u in results if u.get("account_enabled") is False]
+
+    return [EntraOnlyUser(**u) for u in results]
+
+
+@router.get("/users/{object_id}/photo")
+async def get_user_photo(
+    object_id: str,
+    _token: dict = Depends(require_jwt),
+) -> Response:
+    """
+    Return the Entra profile photo for a user by object ID as a JPEG image.
+    Returns 404 if the user has no photo or Entra is not configured.
+    JWT required.
+    """
+    cfg = get_entra_settings()
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="Entra not configured")
+
+    photo_data_url = await run_in_threadpool(
+        get_entra_user_photo,
+        cfg["tenant_id"],
+        cfg["client_id"],
+        cfg["client_secret"],
+        object_id,
+    )
+
+    if not photo_data_url:
+        raise HTTPException(status_code=404, detail="No photo available")
+
+    # photo_data_url is "data:image/jpeg;base64,..." — extract raw bytes for response
+    try:
+        _prefix, b64_data = photo_data_url.split(",", 1)
+        content_type = _prefix.split(":")[1].split(";")[0]
+        import base64 as _b64
+        image_bytes = _b64.b64decode(b64_data)
+        return Response(content=image_bytes, media_type=content_type)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to decode photo")
 
 
 @router.get("/users/{upn:path}", response_model=EntraUserResponse)

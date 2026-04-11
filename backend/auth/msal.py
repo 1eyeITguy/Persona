@@ -10,6 +10,7 @@ The client secret is NEVER logged or included in exception messages.
 
 from __future__ import annotations
 
+import base64
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -346,3 +347,148 @@ def get_entra_user(
         "licenses": licenses,
         "groups": groups,
     }
+
+
+def get_entra_user_photo(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    object_id: str,
+) -> Optional[str]:
+    """
+    Fetch the profile photo for an Entra user by object ID.
+
+    Calls GET /users/{object_id}/photo/$value via the Graph API.
+    Returns a base64 data URL (data:image/jpeg;base64,...) or None when
+    the user has no photo, the request fails, or authentication fails.
+
+    Caller MUST use run_in_threadpool.
+    """
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    try:
+        app = msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=authority,
+        )
+        result = app.acquire_token_for_client(
+            scopes=["https://graph.microsoft.com/.default"]
+        )
+    except Exception:
+        return None
+
+    if "access_token" not in result:
+        return None
+
+    token = result["access_token"]
+    try:
+        resp = _requests.get(
+            f"{_GRAPH_BASE}/users/{object_id}/photo/$value",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            content_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            b64 = base64.b64encode(resp.content).decode("ascii")
+            return f"data:{content_type};base64,{b64}"
+    except Exception as exc:
+        logger.debug("Entra photo fetch error for %s: %s", object_id, exc)
+
+    return None
+
+
+def get_entra_only_users(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+) -> list[dict]:
+    """
+    Fetch all Entra-only users (no AD counterpart) from the Graph API.
+
+    Filters for users where onPremisesSyncEnabled is null (cloud-only accounts).
+    Paginates through all pages automatically.
+
+    Returns a list of dicts matching the EntraOnlyUser schema (minus mfa_methods,
+    licenses, groups which are loaded per-user on detail open).
+
+    Caller MUST use run_in_threadpool.
+    """
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    try:
+        app = msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=authority,
+        )
+        result = app.acquire_token_for_client(
+            scopes=["https://graph.microsoft.com/.default"]
+        )
+    except Exception:
+        return []
+
+    if "access_token" not in result:
+        return []
+
+    token = result["access_token"]
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "ConsistencyLevel": "eventual",
+    }
+
+    # Fetch cloud-only users (onPremisesSyncEnabled eq null means never synced from AD)
+    select_fields = (
+        "id,userPrincipalName,displayName,givenName,surname,mail,"
+        "jobTitle,department,accountEnabled,onPremisesSyncEnabled"
+    )
+    url: Optional[str] = (
+        f"{_GRAPH_BASE}/users"
+        f"?$filter=onPremisesSyncEnabled eq null"
+        f"&$select={select_fields}"
+        f"&$top=999"
+        f"&$count=true"
+    )
+
+    users: list[dict] = []
+    pages = 0
+    while url and pages < 20:  # hard cap at 20 pages (~20 000 users) for safety
+        try:
+            resp = _requests.get(url, headers=headers, timeout=15)
+            if not resp.ok:
+                logger.warning("get_entra_only_users HTTP %s: %s", resp.status_code, resp.text[:200])
+                break
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("get_entra_only_users error: %s", exc)
+            break
+
+        for u in data.get("value", []):
+            # Fetch sign-in activity inline (adds one field per user, no extra call needed
+            # because it's on the user object when signInActivity is in $select —
+            # however signInActivity requires a separate $select call on some tenants,
+            # so we include it as best-effort from the profile data only).
+            last_sign_in: Optional[str] = None
+            sign_in_activity = u.get("signInActivity") or {}
+            if isinstance(sign_in_activity, dict):
+                last_sign_in = sign_in_activity.get("lastSignInDateTime")
+
+            users.append({
+                "entra_object_id": u.get("id", ""),
+                "upn": u.get("userPrincipalName", ""),
+                "display_name": u.get("displayName"),
+                "given_name": u.get("givenName"),
+                "surname": u.get("surname"),
+                "mail": u.get("mail"),
+                "title": u.get("jobTitle"),
+                "department": u.get("department"),
+                "account_enabled": u.get("accountEnabled", True),
+                "last_sign_in": last_sign_in,
+                "mfa_methods": [],
+                "licenses": [],
+                "groups": [],
+                "photo": None,
+            })
+
+        url = data.get("@odata.nextLink")
+        pages += 1
+
+    return users
