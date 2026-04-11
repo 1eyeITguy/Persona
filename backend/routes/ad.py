@@ -251,6 +251,7 @@ async def get_user_merged(
                     user = user.model_copy(update={
                         "entra_last_sign_in": entra_data.get("last_sign_in"),
                         "entra_account_enabled": entra_data.get("account_enabled"),
+                        "entra_default_mfa_method": entra_data.get("default_mfa_method"),
                         "entra_mfa_methods": entra_data.get("mfa_methods", []),
                         "entra_licenses": entra_data.get("licenses", []),
                         "entra_cloud_groups": [

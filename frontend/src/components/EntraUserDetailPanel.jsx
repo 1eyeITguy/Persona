@@ -64,7 +64,7 @@ function GroupTypeBadge({ type }) {
 
 const TABS = [
   { id: 'identity',  label: 'Identity' },
-  { id: 'mfa',       label: 'MFA' },
+  { id: 'auth-methods', label: 'Authentication Methods' },
   { id: 'licenses',  label: 'Licenses' },
   { id: 'contact',   label: 'Contact' },
   { id: 'member-of', label: 'Member Of' },
@@ -207,28 +207,47 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
           </div>
         )
 
-      case 'mfa': {
-        const methods = data.mfa_methods ?? []
+      case 'auth-methods': {
+        const methods    = data.mfa_methods ?? []
+        const defaultMfa = data.default_mfa_method
+        if (!methods.length) {
+          return (
+            <div className="rounded-md border border-warning/20 bg-warning/5 px-4 py-3">
+              <p className="text-sm text-warning">No authentication methods registered.</p>
+              <p className="mt-1 text-xs text-slate-500">This account may be at higher risk.</p>
+            </div>
+          )
+        }
         return (
-          <div>
-            <SectionHeading>Registered MFA Methods</SectionHeading>
-            {methods.length ? (
-              <div className="flex flex-wrap gap-2">
-                {methods.map(m => (
-                  <span key={m} className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-3 py-1 text-sm text-success">
-                    <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <path d="M13 4L6 11 3 8" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                    {m}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-md border border-warning/20 bg-warning/5 px-4 py-3">
-                <p className="text-sm text-warning">No MFA methods registered.</p>
-                <p className="mt-1 text-xs text-slate-500">This account may be at higher risk. Consider requiring MFA enrollment.</p>
+          <div className="space-y-5">
+            {defaultMfa && (
+              <div className="flex items-start gap-3 rounded-md border border-brand-primary/30 bg-brand-primary/5 px-4 py-3">
+                <svg className="mt-0.5 h-4 w-4 shrink-0 text-brand-primary" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <circle cx="8" cy="8" r="6.5"/>
+                  <path d="M8 5v3.5l2 2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                <div>
+                  <p className="text-xs text-slate-500">Default sign-in method</p>
+                  <p className="text-sm font-medium text-slate-200">{defaultMfa}</p>
+                </div>
               </div>
             )}
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="pb-2 pr-8 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Authentication method</th>
+                  <th className="pb-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {methods.map((m, i) => (
+                  <tr key={i} className="border-b border-border-subtle/30 hover:bg-white/[0.02]">
+                    <td className="py-2.5 pr-8 text-sm text-slate-200">{m.method_type}</td>
+                    <td className="py-2.5 text-sm text-slate-400">{m.detail || <span className="text-slate-600">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )
       }

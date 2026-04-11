@@ -197,6 +197,16 @@ class EntraConfigResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class AuthMethod(BaseModel):
+    """
+    A single registered Entra authentication method with its detail.
+    Returned as part of EntraUserResponse.mfa_methods.
+    """
+
+    method_type: str             # "Phone", "Microsoft Authenticator", "Passkey (FIDO2)", etc.
+    detail: Optional[str] = None # device name, phone number, email address, etc.
+
+
 class EntraGroupRef(BaseModel):
     """A single Entra group membership entry."""
 
@@ -216,7 +226,8 @@ class EntraUserResponse(BaseModel):
     account_enabled: Optional[bool] = None
     last_sign_in: Optional[str] = None          # ISO datetime or None
     sign_in_risk_level: Optional[str] = None    # "none"|"low"|"medium"|"high" — requires P2
-    mfa_methods: list[str] = Field(default_factory=list)
+    default_mfa_method: Optional[str] = None    # user's preferred sign-in method label
+    mfa_methods: list[AuthMethod] = Field(default_factory=list)
     licenses: list[str] = Field(default_factory=list)
     groups: list[EntraGroupRef] = Field(default_factory=list)
 
@@ -258,7 +269,8 @@ class EntraOnlyUser(BaseModel):
     department: Optional[str] = None
     account_enabled: bool = True
     last_sign_in: Optional[str] = None
-    mfa_methods: list[str] = Field(default_factory=list)
+    default_mfa_method: Optional[str] = None
+    mfa_methods: list[AuthMethod] = Field(default_factory=list)
     licenses: list[str] = Field(default_factory=list)
     groups: list[EntraGroupRef] = Field(default_factory=list)
     photo: Optional[str] = None  # base64 data URL from Graph /photo/$value
@@ -393,7 +405,8 @@ class ADUser(BaseModel):
     # ---- Merged Entra data (only populated for synced users via /merged endpoint) ----
     entra_last_sign_in: Optional[str] = None
     entra_account_enabled: Optional[bool] = None
-    entra_mfa_methods: list[str] = Field(default_factory=list)
+    entra_default_mfa_method: Optional[str] = None
+    entra_mfa_methods: list[AuthMethod] = Field(default_factory=list)
     entra_licenses: list[str] = Field(default_factory=list)
     entra_cloud_groups: list[EntraGroupRef] = Field(default_factory=list)
     entra_photo: Optional[str] = None  # base64 data URL from Graph /photo/$value

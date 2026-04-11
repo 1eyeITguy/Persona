@@ -32,13 +32,28 @@ _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 _MFA_TYPE_NAMES: dict[str, Optional[str]] = {
     "#microsoft.graph.microsoftAuthenticatorAuthenticationMethod": "Microsoft Authenticator",
-    "#microsoft.graph.phoneAuthenticationMethod": "Phone",
-    "#microsoft.graph.softwareOathAuthenticationMethod": "Authenticator App (TOTP)",
-    "#microsoft.graph.emailAuthenticationMethod": "Email OTP",
-    "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod": "Windows Hello",
-    "#microsoft.graph.fido2AuthenticationMethod": "Security Key (FIDO2)",
-    "#microsoft.graph.temporaryAccessPassAuthenticationMethod": "Temporary Access Pass",
-    "#microsoft.graph.passwordAuthenticationMethod": None,  # not an MFA method
+    "#microsoft.graph.phoneAuthenticationMethod":                  "Phone number",
+    "#microsoft.graph.softwareOathAuthenticationMethod":           "Authenticator App (TOTP)",
+    "#microsoft.graph.emailAuthenticationMethod":                  "Email OTP",
+    "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod": "Windows Hello for Business",
+    "#microsoft.graph.fido2AuthenticationMethod":                  "Passkey",
+    "#microsoft.graph.temporaryAccessPassAuthenticationMethod":    "Temporary Access Pass",
+    "#microsoft.graph.passwordAuthenticationMethod":               None,  # not an MFA method
+}
+
+# Maps userPreferredMethodForSecondaryAuthentication values to display labels
+_DEFAULT_METHOD_LABELS: dict[str, str] = {
+    "push":                     "Microsoft Authenticator notification",
+    "oath":                     "Authenticator App (TOTP)",
+    "voiceMobile":              "Phone call",
+    "sms":                      "Text message (SMS)",
+    "voiceAlternateMobile":     "Alternate mobile (call)",
+    "voiceOffice":              "Office phone (call)",
+    "fido2":                    "Passkey (FIDO2)",
+    "windowsHelloForBusiness":  "Windows Hello for Business",
+    "email":                    "Email OTP",
+    "temporaryAccessPass":      "Temporary Access Pass",
+    "microsoftAuthenticator":   "Microsoft Authenticator",
 }
 
 _SKU_NAMES: dict[str, str] = {
@@ -71,12 +86,53 @@ def _friendly_sku(sku_part_number: str) -> str:
     return _SKU_NAMES.get(sku_part_number, sku_part_number)
 
 
-def _classify_mfa_methods(methods: list) -> list[str]:
+def _build_auth_methods(methods: list) -> list[dict]:
+    """
+    Convert raw Graph authentication method objects to rich dicts with
+    method_type and detail fields.  Password entries are filtered out.
+    """
     result = []
     for m in methods:
-        friendly = _MFA_TYPE_NAMES.get(m.get("@odata.type", ""))
-        if friendly is not None:
-            result.append(friendly)
+        odata = m.get("@odata.type", "")
+        method_type = _MFA_TYPE_NAMES.get(odata)
+        if method_type is None:
+            continue  # password or unknown — skip
+
+        detail: Optional[str] = None
+
+        if odata == "#microsoft.graph.phoneAuthenticationMethod":
+            phone = m.get("phoneNumber", "")
+            ptype = m.get("phoneType", "mobile")
+            label = {
+                "mobile":          "Primary mobile",
+                "alternateMobile": "Alternate mobile",
+                "office":          "Office",
+            }.get(ptype, ptype.capitalize())
+            detail = f"{label}: {phone}" if phone else None
+
+        elif odata == "#microsoft.graph.microsoftAuthenticatorAuthenticationMethod":
+            detail = m.get("displayName")  # device name
+
+        elif odata == "#microsoft.graph.fido2AuthenticationMethod":
+            detail = m.get("model") or m.get("displayName")
+
+        elif odata == "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod":
+            detail = m.get("displayName")  # device name
+
+        elif odata == "#microsoft.graph.emailAuthenticationMethod":
+            detail = m.get("emailAddress")
+
+        elif odata == "#microsoft.graph.softwareOathAuthenticationMethod":
+            detail = m.get("displayName")  # some OATH tokens have a display name
+
+        elif odata == "#microsoft.graph.temporaryAccessPassAuthenticationMethod":
+            if not m.get("isUsable"):
+                detail = "Used or expired"
+            else:
+                lifetime = m.get("lifetimeInMinutes")
+                detail = f"Valid for {lifetime} min" if lifetime else "Active"
+
+        result.append({"method_type": method_type, "detail": detail})
     return result
 
 
@@ -273,9 +329,10 @@ def get_entra_user(
     except Exception:
         pass  # Sign-in activity is best-effort
 
-    # ── 3. MFA methods ─────────────────────────────────────────────────────
+    # ── 3. Authentication methods ───────────────────────────────────────────
     # Requires UserAuthenticationMethod.Read.All application permission.
-    mfa_methods: list[str] = []
+    mfa_methods: list[dict] = []
+    default_mfa_method: Optional[str] = None
     try:
         resp = _requests.get(
             f"{_GRAPH_BASE}/users/{resolved_id}/authentication/methods",
@@ -284,15 +341,28 @@ def get_entra_user(
         )
         if resp.ok:
             raw_methods = resp.json().get("value", [])
-            logger.debug("MFA methods raw for %s: %s", resolved_id, raw_methods)
-            mfa_methods = _classify_mfa_methods(raw_methods)
+            mfa_methods = _build_auth_methods(raw_methods)
         else:
             logger.warning(
-                "MFA methods fetch returned HTTP %s for %s: %s",
+                "Auth methods fetch returned HTTP %s for %s: %s",
                 resp.status_code, resolved_id, resp.text[:200],
             )
     except Exception as exc:
-        logger.warning("MFA methods fetch error for %s: %s", resolved_id, exc)
+        logger.warning("Auth methods fetch error for %s: %s", resolved_id, exc)
+
+    # ── 3a. Default sign-in method (sign-in preferences) ───────────────────
+    try:
+        resp = _requests.get(
+            f"{_GRAPH_BASE}/users/{resolved_id}/authentication/signInPreferences",
+            headers=headers,
+            timeout=10,
+        )
+        if resp.ok:
+            pref = resp.json().get("userPreferredMethodForSecondaryAuthentication")
+            if pref:
+                default_mfa_method = _DEFAULT_METHOD_LABELS.get(pref, pref)
+    except Exception:
+        pass  # Best-effort — not critical
 
     # ── 3. License details ─────────────────────────────────────────────────
     licenses: list[str] = []
@@ -348,6 +418,7 @@ def get_entra_user(
         "account_enabled": user_data.get("accountEnabled"),
         "last_sign_in": last_sign_in,
         "sign_in_risk_level": None,  # requires Entra ID P2 risky-users API; deferred
+        "default_mfa_method": default_mfa_method,
         "mfa_methods": mfa_methods,
         "licenses": licenses,
         "groups": groups,
