@@ -139,7 +139,7 @@ function AppShell() {
 
 function UsersPage() {
   const [selectedUserDn, setSelectedUserDn] = useState(null)
-  const [treeWidth, setTreeWidth] = useState(300)
+  const [treeWidth, setTreeWidth] = useState(320)
   const containerRef = useRef(null)
 
   // null  = no active search (tree shown)
@@ -253,7 +253,7 @@ function UsersPage() {
 
 function DevicesPage() {
   const [selectedDn, setSelectedDn]       = useState(null)
-  const [treeWidth, setTreeWidth]         = useState(300)
+  const [treeWidth, setTreeWidth]         = useState(320)
   const containerRef                      = useRef(null)
   const [searchResults, setSearchResults] = useState(null)
   const [isSearchLoading, setIsSearchLoading] = useState(false)
