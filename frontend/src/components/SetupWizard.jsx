@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import axios from 'axios'
-import { Shield, CheckCircle, Eye, EyeOff, Loader2, ExternalLink, ChevronRight } from 'lucide-react'
+import { Shield, CheckCircle, Eye, EyeOff, Loader2, ExternalLink, ChevronRight, Upload } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -437,11 +437,18 @@ function Step3({ ldapData, setLdapData, onNext }) {
 // Step 4 — Connect to Entra ID (optional)
 // ---------------------------------------------------------------------------
 
+// Graph API application permissions required on the app registration.
+// Grouped: core identity permissions (always required) + Exchange permissions (for Exchange tab).
 const REQUIRED_PERMISSIONS = [
-  'User.Read.All',
-  'Group.Read.All',
-  'Directory.Read.All',
-  'AuditLog.Read.All',
+  // Core identity — always required
+  { name: 'User.Read.All',        note: 'Read all user profiles' },
+  { name: 'Group.Read.All',       note: 'Read group memberships' },
+  { name: 'Directory.Read.All',   note: 'Read directory data' },
+  { name: 'AuditLog.Read.All',    note: 'Read sign-in activity' },
+  // Exchange Online — required for the Exchange tab
+  { name: 'MailboxSettings.Read', note: 'Read OOO status and archive settings' },
+  { name: 'Mail.Read',            note: 'Read mailbox folder sizes' },
+  { name: 'Exchange.ManageAsApp', note: 'Exchange Online PowerShell app-only access' },
 ]
 
 // ── Manual entry form (existing flow, unchanged) ──────────────────────────
@@ -596,11 +603,19 @@ function StepEntra({ onSave, onSkip }) {
               <li>
                 <strong className="text-slate-300">API permissions</strong> → Add a permission → Microsoft Graph → <strong className="text-slate-300">Application permissions</strong> → add:
                 <ul className="mt-1 ml-4 space-y-0.5 list-disc">
-                  {REQUIRED_PERMISSIONS.map(p => <li key={p} className="font-mono">{p}</li>)}
+                  {REQUIRED_PERMISSIONS.map(p => (
+                    <li key={p.name}>
+                      <span className="font-mono">{p.name}</span>
+                      <span className="ml-1 text-slate-500">— {p.note}</span>
+                    </li>
+                  ))}
                 </ul>
               </li>
               <li>Click <strong className="text-slate-300">Grant admin consent</strong> for your tenant</li>
               <li><strong className="text-slate-300">Certificates &amp; secrets</strong> → New client secret → copy the <strong className="text-slate-300">Value</strong> immediately</li>
+              <li>
+                <strong className="text-slate-300">Certificates &amp; secrets</strong> → <strong className="text-slate-300">Certificates</strong> tab → upload a certificate (needed for Exchange PowerShell — configured in the next step)
+              </li>
             </ol>
           </div>
         )}
@@ -619,7 +634,199 @@ function StepEntra({ onSave, onSkip }) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 5 — Confirm & Save
+// Step 5 — Exchange Online PowerShell (optional)
+// ---------------------------------------------------------------------------
+
+function StepExchangePS({ onSave, onSkip }) {
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [appId, setAppId] = useState('')
+  const [tenantDomain, setTenantDomain] = useState('')
+  const [certFile, setCertFile] = useState(null)
+  const [certPassword, setCertPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [testResult, setTestResult] = useState(null)
+  const fileRef = useRef(null)
+
+  async function handleSaveAndTest() {
+    if (!appId.trim() || !tenantDomain.trim()) return
+    setTestResult(null)
+    setLoading(true)
+    try {
+      const form = new FormData()
+      form.append('app_id', appId.trim())
+      form.append('tenant_domain', tenantDomain.trim())
+      if (certFile) form.append('certificate', certFile)
+      if (certPassword) form.append('cert_password', certPassword)
+
+      // Endpoint accepts unauthenticated requests during initial setup
+      await axios.put('/api/v1/settings/exchange-ps-config', form)
+
+      const testRes = await axios.post('/api/v1/settings/test-exchange-ps')
+      setTestResult(testRes.data)
+      if (testRes.data.success) {
+        setTimeout(() => onSave(), 1500)
+      }
+    } catch (err) {
+      setTestResult({
+        success: false,
+        message: err.response?.data?.detail || 'Failed to save configuration.',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <>
+      <h1 className="text-xl font-semibold text-white mb-1">
+        Exchange Online PowerShell{' '}
+        <span className="text-base font-normal text-slate-500">(optional)</span>
+      </h1>
+      <p className="text-sm text-slate-400 mb-5">
+        Required for shared mailbox access visibility. Uses certificate-based app authentication.
+        All Exchange Online mailbox data (email aliases, OOO, archive status) is available without
+        this step — only shared mailbox access requires it.
+      </p>
+
+      {/* Setup guide */}
+      <div className="rounded-md border border-border-subtle bg-app-bg overflow-hidden mb-5">
+        <button
+          type="button"
+          onClick={() => setGuideOpen(v => !v)}
+          className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-white/5 transition-colors"
+        >
+          <span className="text-xs font-medium text-slate-300">How to configure Exchange Online PowerShell access</span>
+          <ChevronRight className={`h-4 w-4 text-slate-500 transition-transform ${guideOpen ? 'rotate-90' : ''}`} />
+        </button>
+        {guideOpen && (
+          <div className="border-t border-border-subtle px-4 py-3 text-xs text-slate-400 space-y-3">
+            <p className="font-medium text-slate-300">1 — Upload a certificate to the app registration</p>
+            <p>Generate a self-signed certificate or use an existing one. Upload it under
+              <strong className="text-slate-300"> Certificates &amp; secrets → Certificates</strong> in the
+              Azure Portal. Note the <strong className="text-slate-300">thumbprint</strong>.</p>
+            <p>To generate a self-signed cert (PowerShell):</p>
+            <pre className="bg-black/30 rounded p-2 text-xs font-mono text-slate-300 overflow-x-auto whitespace-pre-wrap">{`$cert = New-SelfSignedCertificate \\
+  -Subject "CN=Persona-ExchangePS" \\
+  -CertStoreLocation "Cert:\\CurrentUser\\My" \\
+  -KeyExportPolicy Exportable \\
+  -KeySpec Signature \\
+  -KeyLength 2048 \\
+  -HashAlgorithm SHA256 \\
+  -NotAfter (Get-Date).AddYears(2)
+
+# Export PFX (set a password)
+Export-PfxCertificate -Cert $cert \\
+  -FilePath C:\\persona-exchange.pfx \\
+  -Password (ConvertTo-SecureString "YourPassword" -AsPlainText -Force)
+
+# Export CER for upload to Azure
+Export-Certificate -Cert $cert -FilePath C:\\persona-exchange.cer`}</pre>
+
+            <p className="font-medium text-slate-300 pt-1">2 — Grant the service principal Exchange access</p>
+            <p>Run these commands in <strong className="text-slate-300">Exchange Online PowerShell</strong> as an Exchange admin:</p>
+            <pre className="bg-black/30 rounded p-2 text-xs font-mono text-slate-300 overflow-x-auto whitespace-pre-wrap">{`# Find your app's Object ID in Entra (not the Client ID)
+$objectId = "<Entra App Object ID>"
+$clientId  = "<Application (client) ID>"
+
+$sp = New-ServicePrincipal \\
+  -AppId $clientId \\
+  -ServiceId $objectId \\
+  -DisplayName "Persona"
+
+New-ManagementRoleAssignment \\
+  -Role "View-Only Recipients" \\
+  -App $sp.Identity`}</pre>
+            <p>After granting the role, Exchange Online replication may take a few minutes before the connection test succeeds.</p>
+          </div>
+        )}
+      </div>
+
+      {/* Form */}
+      <div className="space-y-4">
+        <div>
+          <Label htmlFor="exch_appid">Application (Client) ID</Label>
+          <Input
+            id="exch_appid"
+            value={appId}
+            onChange={e => setAppId(e.target.value)}
+            placeholder="Same Client ID used for Graph API"
+          />
+        </div>
+        <div>
+          <Label htmlFor="exch_domain">Tenant Primary Domain</Label>
+          <Input
+            id="exch_domain"
+            value={tenantDomain}
+            onChange={e => setTenantDomain(e.target.value)}
+            placeholder="contoso.com"
+          />
+          <p className="mt-1 text-xs text-slate-500">The primary domain of your Microsoft 365 tenant (not the tenant ID).</p>
+        </div>
+        <div>
+          <Label>Certificate (PFX file)</Label>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".pfx,.p12"
+            className="hidden"
+            onChange={e => setCertFile(e.target.files?.[0] ?? null)}
+          />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="flex w-full items-center gap-2 rounded-md border border-border-subtle bg-app-bg px-3 py-2 text-sm text-slate-300 hover:border-brand-primary/50 hover:bg-white/5 transition-colors"
+          >
+            <Upload className="h-4 w-4 text-slate-500" />
+            {certFile ? certFile.name : 'Choose PFX file…'}
+          </button>
+        </div>
+        {certFile && (
+          <div>
+            <Label htmlFor="exch_certpw">Certificate Password <span className="text-slate-500 font-normal">(if encrypted)</span></Label>
+            <Input
+              id="exch_certpw"
+              type="password"
+              value={certPassword}
+              onChange={e => setCertPassword(e.target.value)}
+              placeholder="Leave blank if no password"
+              autoComplete="new-password"
+            />
+          </div>
+        )}
+      </div>
+
+      {testResult && (
+        <div className={`mt-4 rounded-md px-3 py-2 text-sm ${
+          testResult.success
+            ? 'bg-success/10 text-success'
+            : 'bg-danger/10 text-danger'
+        }`}>
+          {testResult.message}
+        </div>
+      )}
+
+      <div className="mt-6 space-y-2">
+        <Button
+          onClick={handleSaveAndTest}
+          loading={loading}
+          disabled={!appId.trim() || !tenantDomain.trim() || !certFile}
+        >
+          Save &amp; Test Connection →
+        </Button>
+      </div>
+
+      <button
+        onClick={onSkip}
+        className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors py-1 mt-3"
+      >
+        Skip for now →
+      </button>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Step 6 — Confirm & Save
 // ---------------------------------------------------------------------------
 
 function Step5({ ldapData, entraCreds, onFinish }) {
@@ -715,6 +922,7 @@ export default function SetupWizard() {
   const [step, setStep] = useState(1)
   const [ldapData, setLdapData] = useState(DEFAULT_LDAP)
   const [entraCreds, setEntraCreds] = useState(undefined) // undefined = not yet decided
+
   function handleFinish() {
     // Redirect to login — full page reload so App re-checks /settings/status
     window.location.href = '/login'
@@ -724,7 +932,7 @@ export default function SetupWizard() {
     <div className="flex min-h-screen items-center justify-center bg-app-bg px-4 py-12">
       <div className="w-full max-w-md">
         <Logo />
-        <StepIndicator current={step} total={5} />
+        <StepIndicator current={step} total={6} />
         <Card>
           {step === 1 && <Step1 onNext={() => setStep(2)} />}
           {step === 2 && <Step2 onNext={() => setStep(3)} />}
@@ -738,6 +946,12 @@ export default function SetupWizard() {
             />
           )}
           {step === 5 && (
+            <StepExchangePS
+              onSave={() => setStep(6)}
+              onSkip={() => setStep(6)}
+            />
+          )}
+          {step === 6 && (
             <Step5 ldapData={ldapData} entraCreds={entraCreds} onFinish={handleFinish} />
           )}
         </Card>

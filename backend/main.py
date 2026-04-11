@@ -24,6 +24,7 @@ from backend.config import settings
 from backend.routes import ad as ad_router
 from backend.routes import auth as auth_router
 from backend.routes import entra as entra_router
+from backend.routes import exchange as exchange_router
 from backend.routes import settings as settings_router
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ api.include_router(settings_router.router)
 api.include_router(auth_router.router)
 api.include_router(ad_router.router)
 api.include_router(entra_router.router)
+api.include_router(exchange_router.router)
 app.include_router(api)
 
 # ---------------------------------------------------------------------------

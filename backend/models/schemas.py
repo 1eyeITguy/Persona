@@ -566,3 +566,68 @@ class DeviceFilterOptions(BaseModel):
 
     operating_systems: list[str]
     ous: list[GroupRef]
+
+
+# ---------------------------------------------------------------------------
+# Exchange models
+# ---------------------------------------------------------------------------
+
+
+class ProxyAddress(BaseModel):
+    """A single email address from proxyAddresses."""
+
+    address: str         # e.g. "jane.smith@contoso.com"
+    is_primary: bool     # True for the primary SMTP address
+    protocol: str        # "SMTP" (primary) | "smtp" (alias) | "X400" | "SIP" | etc.
+
+
+class SharedMailboxAccess(BaseModel):
+    """A shared mailbox that the user has been granted access to."""
+
+    display_name: str
+    email: str
+    access_type: str     # "FullAccess" | "SendAs" | "SendOnBehalf"
+
+
+class ExchangeMailboxResponse(BaseModel):
+    """
+    Exchange mailbox data for a user.
+    Returned by GET /api/v1/exchange/user/{upn}/mailbox.
+
+    soa values: "cloud" | "on_prem" | "stale_ad_attrs" | "unknown" | "none"
+    When soa is not "cloud", most mailbox fields will be None.
+    """
+
+    soa: str
+    primary_email: Optional[str] = None
+    display_name: Optional[str] = None
+    proxy_addresses: list[ProxyAddress] = Field(default_factory=list)
+    mailbox_size_bytes: Optional[int] = None
+    archive_enabled: Optional[bool] = None
+    ooo_enabled: Optional[bool] = None
+    ooo_message: Optional[str] = None
+    distribution_groups: list[dict] = Field(default_factory=list)   # [{name, mail}]
+    shared_mailbox_access: list[SharedMailboxAccess] = Field(default_factory=list)
+
+
+class ExchangePSConfigUpdate(BaseModel):
+    """Used by PUT /api/v1/settings/exchange-ps-config to save EXO PS credentials."""
+
+    app_id: str          # Entra application (client) ID — same app registration as Graph
+    tenant_domain: str   # Primary domain, e.g. "contoso.com" (used for Connect-ExchangeOnline)
+    cert_thumbprint: Optional[str] = None  # populated after cert upload
+
+
+class ExchangePSConfigResponse(BaseModel):
+    """EXO PS config safe for API responses."""
+
+    app_id: str
+    tenant_domain: str
+    cert_thumbprint: Optional[str] = None
+    cert_expires: Optional[str] = None     # ISO date from cert metadata
+    connected: bool = False
+
+
+class TestExchangePSResponse(BaseModel):
+    success: bool
+    message: str

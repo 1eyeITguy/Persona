@@ -1382,6 +1382,66 @@ def query_user_devices(user_dn: str) -> list[ADComputerSummary]:
     return sorted(results, key=lambda c: c.name.lower())
 
 
+def get_exchange_attrs_by_upn(upn: str) -> dict | None:
+    """
+    Return Exchange-relevant AD attributes for a user looked up by UPN.
+
+    Used by the Exchange SOA resolver to determine attribute authority.
+    Returns None if the user is not found or LDAP is not configured.
+    Caller MUST use run_in_threadpool.
+
+    Returned dict keys (all may be None/absent):
+        msexch_recipient_type  int | None   (msExchRecipientTypeDetails)
+        proxy_addresses        list[str]    (proxyAddresses)
+        home_mdb               str | None   (homeMDB)
+        mail                   str | None
+    """
+    cfg = _load_ldap_settings()
+    if cfg is None:
+        return None
+
+    conn = get_service_connection()
+    safe_upn = escape_filter_chars(upn)
+    conn.search(
+        search_base=cfg.base_dn,
+        search_filter=f"(&(objectClass=user)(userPrincipalName={safe_upn}))",
+        search_scope=SUBTREE,
+        attributes=[
+            "msExchRecipientTypeDetails",
+            "proxyAddresses",
+            "homeMDB",
+            "mail",
+        ],
+        size_limit=1,
+    )
+
+    if not conn.entries:
+        conn.unbind()
+        return None
+
+    e = conn.entries[0]
+
+    def _raw_list(attr: str) -> list[str]:
+        try:
+            val = e[attr].value
+            if val is None:
+                return []
+            if isinstance(val, list):
+                return [str(v) for v in val]
+            return [str(val)]
+        except Exception:
+            return []
+
+    result = {
+        "msexch_recipient_type": _int(e, "msExchRecipientTypeDetails"),
+        "proxy_addresses": _raw_list("proxyAddresses"),
+        "home_mdb": _str(e, "homeMDB"),
+        "mail": _str(e, "mail"),
+    }
+    conn.unbind()
+    return result
+
+
 def get_device_filter_options() -> DeviceFilterOptions:
     """
     Return distinct operating system values and all OUs for device search dropdowns.

@@ -13,27 +13,33 @@ Auth rules:
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from passlib.context import CryptContext
 from starlette.concurrency import run_in_threadpool
-from typing import List
+from typing import List, Optional
 
 from backend.app_config import (
     get_entra_settings,
+    get_exchange_ps_config,
     get_ldap_settings,
     get_license_config,
     is_entra_configured,
+    is_exchange_ps_configured,
     is_setup_complete,
     load_config,
     save_config,
+    save_exchange_ps_config,
     save_license_config,
 )
 from backend.auth.ldap import test_ldap_connection
+from backend.config import settings as app_settings
 from backend.deps import optional_jwt, require_jwt
 from backend.models.schemas import (
     BootstrapRequest,
     EntraConfigUpdate,
+    ExchangePSConfigResponse,
     LDAPSettings,
     LDAPSettingsUpdate,
     LicenseConfigEntry,
@@ -44,6 +50,7 @@ from backend.models.schemas import (
     TestConnectionResponse,
     TestEntraConnectionRequest,
     TestEntraConnectionResponse,
+    TestExchangePSResponse,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -394,4 +401,159 @@ async def save_license_config_endpoint(
     """
     save_license_config([e.model_dump() for e in entries])
     return {"success": True, "saved": len(entries)}
+
+
+# ---------------------------------------------------------------------------
+# Exchange Online PowerShell configuration
+# ---------------------------------------------------------------------------
+
+
+def _extract_cert_thumbprint(pfx_bytes: bytes, password: bytes | None = None) -> str:
+    """Extract the SHA-1 thumbprint from a PFX certificate file."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.serialization import pkcs12
+
+    _, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, password)
+    if cert is None:
+        raise ValueError("No certificate found in PFX file")
+    return cert.fingerprint(hashes.SHA1()).hex().upper()
+
+
+def _cert_expiry(pfx_bytes: bytes, password: bytes | None = None) -> Optional[str]:
+    """Return the certificate expiry date as an ISO date string, or None on error."""
+    try:
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        _, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, password)
+        if cert is None:
+            return None
+        return cert.not_valid_after_utc.date().isoformat()
+    except Exception:
+        return None
+
+
+@router.get("/exchange-ps-config", response_model=ExchangePSConfigResponse)
+async def get_exchange_ps_config_endpoint(
+    _token: object = Depends(optional_jwt),
+) -> ExchangePSConfigResponse:
+    if is_setup_complete() and _token is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    """Return current EXO PowerShell configuration (no secrets). JWT required."""
+    cfg = get_exchange_ps_config()
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="Exchange PowerShell not configured")
+    return ExchangePSConfigResponse(
+        app_id=cfg.get("app_id", ""),
+        tenant_domain=cfg.get("tenant_domain", ""),
+        cert_thumbprint=cfg.get("cert_thumbprint"),
+        cert_expires=cfg.get("cert_expires"),
+        connected=True,
+    )
+
+
+@router.put("/exchange-ps-config")
+async def update_exchange_ps_config(
+    app_id: str = Form(...),
+    tenant_domain: str = Form(...),
+    cert_password: Optional[str] = Form(None),
+    certificate: Optional[UploadFile] = File(None),
+    _token: object = Depends(optional_jwt),
+) -> dict:
+    if is_setup_complete() and _token is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    """
+    Save Exchange Online PowerShell configuration.
+
+    If a certificate file is provided (PFX format), it is saved to
+    data/certs/exchange.pfx and the thumbprint is extracted automatically.
+    If no certificate is uploaded, the previously saved certificate is kept.
+
+    JWT required.
+    """
+    certs_dir = Path(app_settings.data_dir) / "certs"
+    cert_path = certs_dir / "exchange.pfx"
+
+    pfx_bytes: Optional[bytes] = None
+    if certificate is not None:
+        pfx_bytes = await certificate.read()
+        if not pfx_bytes:
+            raise HTTPException(status_code=422, detail="Uploaded certificate file is empty")
+
+    # Extract thumbprint from new cert, or keep existing
+    thumbprint: Optional[str] = None
+    cert_expires: Optional[str] = None
+    pfx_password = cert_password.encode() if cert_password else None
+
+    if pfx_bytes is not None:
+        try:
+            thumbprint = _extract_cert_thumbprint(pfx_bytes, pfx_password)
+            cert_expires = _cert_expiry(pfx_bytes, pfx_password)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Could not read certificate: {exc}. "
+                       "Ensure the file is a valid PFX and the password is correct.",
+            )
+        # Save the PFX file
+        certs_dir.mkdir(parents=True, exist_ok=True)
+        cert_path.write_bytes(pfx_bytes)
+    else:
+        # Keep existing cert info if already configured
+        existing = get_exchange_ps_config()
+        if existing:
+            thumbprint = existing.get("cert_thumbprint")
+            cert_expires = existing.get("cert_expires")
+            # cert_path stays the same
+
+    save_exchange_ps_config({
+        "app_id": app_id,
+        "tenant_domain": tenant_domain,
+        "cert_path": str(cert_path),
+        "cert_thumbprint": thumbprint,
+        "cert_expires": cert_expires,
+    })
+
+    return {
+        "success": True,
+        "cert_thumbprint": thumbprint,
+        "cert_expires": cert_expires,
+    }
+
+
+@router.post("/test-exchange-ps", response_model=TestExchangePSResponse)
+async def test_exchange_ps_endpoint(
+    _token: object = Depends(optional_jwt),
+) -> TestExchangePSResponse:
+    if is_setup_complete() and _token is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    """
+    Test the Exchange Online PowerShell connection using the saved configuration.
+    JWT required.
+    """
+    cfg = get_exchange_ps_config()
+    if cfg is None:
+        return TestExchangePSResponse(
+            success=False,
+            message="Exchange PowerShell is not configured. Upload a certificate first.",
+        )
+
+    from backend.services.exchange_ps import test_ewo_connection  # noqa: PLC0415
+    result = await run_in_threadpool(
+        test_ewo_connection,
+        cfg["app_id"],
+        cfg.get("cert_path", ""),
+        cfg["tenant_domain"],
+    )
+    return TestExchangePSResponse(**result)
 

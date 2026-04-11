@@ -5,6 +5,39 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
+## [Unreleased] — Phase 3: Exchange Online View
+
+### Added
+- **Exchange tab** in the user detail panel — visible for all AD users; content adapts to the resolved Source of Authority (SOA)
+- **Exchange SOA resolver** (`backend/services/exchange_soa.py`) — three-layer detection algorithm:
+  - Layer 1: Per-mailbox declaration from Graph API
+  - Layer 2: Org-wide `BlockExchangeProvisioningFromOnPremEnabled` flag (via EXO PowerShell)
+  - Layer 3: AD `msExchRecipientTypeDetails` attribute value
+- **Five SOA states**: `cloud`, `on_prem`, `stale_ad_attrs`, `unknown`, `none`
+- **STALE_AD_ATTRS protection** — AD Exchange attributes are suppressed when the org has migrated to Exchange Online but AD still carries frozen pre-migration data; a warning card guides the admin to connect Entra for accurate data
+- **Graph API Exchange data** (`backend/services/exchange_graph.py`):
+  - Primary email and all proxy addresses (labeled primary vs. alias)
+  - Mailbox settings: OOO status, archive enabled/disabled
+  - Mailbox size (requires `Mail.Read` permission)
+  - Distribution group membership (mail-enabled groups via `transitiveMemberOf`)
+- **EXO PowerShell integration** (`backend/services/exchange_ps.py`) — certificate-based app-only auth for:
+  - `BlockExchangeProvisioningFromOnPremEnabled` org flag (cached 1 hour)
+  - Shared mailbox access (`Get-MailboxPermission`, `Get-RecipientPermission`)
+  - Graceful degradation: returns empty/None when `pwsh` is unavailable or cert not configured
+- **`GET /api/v1/exchange/user/{upn}/mailbox`** — Exchange mailbox endpoint with SOA resolution
+- **Exchange PS configuration** endpoints (`/api/v1/settings/exchange-ps-config`, test-exchange-ps) — certificate PFX upload, thumbprint extraction, EXO connection test
+- **`get_exchange_attrs_by_upn()`** in `backend/auth/ldap.py` — lightweight LDAP lookup for Exchange-relevant AD attributes
+- **`ExchangePSSection`** in Settings page — manage certificate upload, tenant domain, and connection test
+- **Exchange PowerShell step** in Setup Wizard (Step 5) — instructions for generating a self-signed certificate, uploading to app registration, and granting `View-Only Recipients` role via `New-ManagementRoleAssignment`
+- **STALE warning banner** in the Attributes tab — dismissable notice listing suppressed Exchange attributes when SOA is stale
+- **PowerShell Core + ExchangeOnlineManagement module** added to Docker runtime image (~200 MB; can be commented out; all Graph-based Exchange features still work without it)
+
+### Changed
+- **Entra app registration permissions updated** — three new application permissions required: `MailboxSettings.Read`, `Mail.Read`, `Exchange.ManageAsApp`; permissions list in Setup Wizard and Settings updated with descriptions
+- Setup Wizard step count: 5 → 6 (Exchange PS step inserted before Confirm)
+
+---
+
 ## [Unreleased] — Identity Navigation Redesign
 
 ### Added

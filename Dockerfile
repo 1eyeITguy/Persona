@@ -26,8 +26,29 @@ COPY backend/ ./backend/
 # Copy built frontend into static/ (FastAPI serves this at runtime)
 COPY --from=frontend-build /frontend/dist/ ./backend/static/
 
-# Volume mount point for runtime config (config.json, etc.)
-RUN mkdir -p /app/data
+# Volume mount point for runtime config (config.json, certs/, etc.)
+RUN mkdir -p /app/data /app/data/certs
+
+# ---------------------------------------------------------------------------
+# PowerShell Core + ExchangeOnlineManagement module
+#
+# Required for Exchange Online PowerShell integration (Phase 3).
+# Adds ~200 MB to the image. The EXO features degrade gracefully if pwsh
+# is unavailable, so this block can be commented out in space-constrained
+# environments — all Graph API-based Exchange features will still work.
+# ---------------------------------------------------------------------------
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget gnupg ca-certificates && \
+    wget -q "https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb" && \
+    dpkg -i packages-microsoft-prod.deb && \
+    rm packages-microsoft-prod.deb && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends powershell && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pwsh -NonInteractive -Command \
+    "Install-Module -Name ExchangeOnlineManagement -Force -Scope AllUsers -AcceptLicense"
 
 EXPOSE 8000
 

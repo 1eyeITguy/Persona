@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Loader2, ExternalLink, AlertTriangle, ChevronRight, Search } from 'lucide-react'
+import { Loader2, ExternalLink, AlertTriangle, ChevronRight, Search, Upload } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 
@@ -45,10 +45,13 @@ function ExpiryBadge({ isoDate }) {
 // ---------------------------------------------------------------------------
 
 const REQUIRED_PERMISSIONS = [
-  'User.Read.All',
-  'Group.Read.All',
-  'Directory.Read.All',
-  'AuditLog.Read.All',
+  { name: 'User.Read.All',        note: 'Read all user profiles' },
+  { name: 'Group.Read.All',       note: 'Read group memberships' },
+  { name: 'Directory.Read.All',   note: 'Read directory data' },
+  { name: 'AuditLog.Read.All',    note: 'Read sign-in activity' },
+  { name: 'MailboxSettings.Read', note: 'Read OOO status and archive settings' },
+  { name: 'Mail.Read',            note: 'Read mailbox folder sizes' },
+  { name: 'Exchange.ManageAsApp', note: 'Exchange Online PowerShell app-only access' },
 ]
 
 function EntraSection({ authHeaders }) {
@@ -239,7 +242,12 @@ function EntraSection({ authHeaders }) {
                     <li>
                       <strong className="text-slate-300">API permissions</strong> → Add a permission → Microsoft Graph → <strong className="text-slate-300">Application permissions</strong> → add:
                       <ul className="mt-1 ml-4 space-y-0.5 list-disc">
-                        {REQUIRED_PERMISSIONS.map(p => <li key={p} className="font-mono">{p}</li>)}
+                        {REQUIRED_PERMISSIONS.map(p => (
+                          <li key={p.name}>
+                            <span className="font-mono">{p.name}</span>
+                            <span className="ml-1 text-slate-500">— {p.note}</span>
+                          </li>
+                        ))}
                       </ul>
                     </li>
                     <li>Click <strong className="text-slate-300">Grant admin consent</strong> for your tenant</li>
@@ -557,6 +565,186 @@ function LicensesSection({ authHeaders }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// ExchangePSSection
+// ---------------------------------------------------------------------------
+
+function ExchangePSSection({ authHeaders }) {
+  const [config, setConfig] = useState(null)   // null = loading, false = not configured
+  const [loading, setLoading] = useState(true)
+  const [appId, setAppId] = useState('')
+  const [tenantDomain, setTenantDomain] = useState('')
+  const [certFile, setCertFile] = useState(null)
+  const [certPassword, setCertPassword] = useState('')
+  const [saveResult, setSaveResult] = useState(null)
+  const [testResult, setTestResult] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const fileRef = useRef(null)
+
+  useEffect(() => {
+    axios.get('/api/v1/settings/exchange-ps-config', { headers: authHeaders })
+      .then(res => {
+        setConfig(res.data)
+        setAppId(res.data.app_id || '')
+        setTenantDomain(res.data.tenant_domain || '')
+      })
+      .catch(() => setConfig(false))
+      .finally(() => setLoading(false))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleSave() {
+    setSaveResult(null)
+    setSaving(true)
+    try {
+      const form = new FormData()
+      form.append('app_id', appId.trim())
+      form.append('tenant_domain', tenantDomain.trim())
+      if (certFile) form.append('certificate', certFile)
+      if (certPassword) form.append('cert_password', certPassword)
+      const res = await axios.put('/api/v1/settings/exchange-ps-config', form, { headers: authHeaders })
+      setSaveResult({ success: true, message: 'Configuration saved.' + (res.data.cert_thumbprint ? ` Thumbprint: ${res.data.cert_thumbprint}` : '') })
+      // Reload config
+      const cfg = await axios.get('/api/v1/settings/exchange-ps-config', { headers: authHeaders })
+      setConfig(cfg.data)
+    } catch (err) {
+      setSaveResult({ success: false, message: err.response?.data?.detail || 'Save failed.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleTest() {
+    setTestResult(null)
+    setTesting(true)
+    try {
+      const res = await axios.post('/api/v1/settings/test-exchange-ps', {}, { headers: authHeaders })
+      setTestResult(res.data)
+    } catch (err) {
+      setTestResult({ success: false, message: err.response?.data?.detail || 'Test failed.' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  if (loading) {
+    return <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+  }
+
+  return (
+    <div className="space-y-6 rounded-xl border border-border-subtle bg-surface p-6">
+      <div>
+        <h2 className="text-base font-semibold text-white">Exchange Online PowerShell</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Certificate-based app authentication for Exchange Online. Required for shared mailbox access.
+        </p>
+      </div>
+
+      {config && (
+        <div className="rounded-md border border-border-subtle bg-app-bg px-4 py-3 text-sm space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500">Status</span>
+            <span className="text-success text-xs font-medium">Configured</span>
+          </div>
+          {config.cert_thumbprint && (
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Thumbprint</span>
+              <span className="font-mono text-xs text-slate-300">{config.cert_thumbprint.slice(0, 16)}…</span>
+            </div>
+          )}
+          {config.cert_expires && (
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Cert expires</span>
+              <ExpiryBadge isoDate={config.cert_expires} />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-4">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-slate-300">Application (Client) ID</label>
+          <input
+            type="text"
+            value={appId}
+            onChange={e => setAppId(e.target.value)}
+            placeholder="Same Client ID used for Graph API"
+            className="w-full rounded-md border border-border-subtle bg-app-bg px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-brand-primary focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-slate-300">Tenant Primary Domain</label>
+          <input
+            type="text"
+            value={tenantDomain}
+            onChange={e => setTenantDomain(e.target.value)}
+            placeholder="contoso.com"
+            className="w-full rounded-md border border-border-subtle bg-app-bg px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-brand-primary focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-slate-300">
+            Certificate (PFX){' '}
+            {config ? <span className="font-normal text-slate-500">— leave blank to keep existing</span> : null}
+          </label>
+          <input ref={fileRef} type="file" accept=".pfx,.p12" className="hidden" onChange={e => setCertFile(e.target.files?.[0] ?? null)} />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="flex w-full items-center gap-2 rounded-md border border-border-subtle bg-app-bg px-3 py-2 text-sm text-slate-300 hover:border-brand-primary/50 hover:bg-white/5 transition-colors"
+          >
+            <Upload className="h-4 w-4 text-slate-500" />
+            {certFile ? certFile.name : 'Choose PFX file…'}
+          </button>
+        </div>
+        {certFile && (
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-300">Certificate Password <span className="font-normal text-slate-500">(if encrypted)</span></label>
+            <input
+              type="password"
+              value={certPassword}
+              onChange={e => setCertPassword(e.target.value)}
+              placeholder="Leave blank if no password"
+              autoComplete="new-password"
+              className="w-full rounded-md border border-border-subtle bg-app-bg px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-brand-primary focus:outline-none"
+            />
+          </div>
+        )}
+      </div>
+
+      {saveResult && (
+        <p className={`text-sm rounded-md px-3 py-2 ${saveResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
+          {saveResult.message}
+        </p>
+      )}
+      {testResult && (
+        <p className={`text-sm rounded-md px-3 py-2 ${testResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
+          {testResult.message}
+        </p>
+      )}
+
+      <div className="flex gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving || !appId.trim() || !tenantDomain.trim()}
+          className="flex items-center gap-2 rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-primary/90 disabled:opacity-50 transition-colors"
+        >
+          {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+          Save
+        </button>
+        <button
+          onClick={handleTest}
+          disabled={testing || !config}
+          className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/5 disabled:opacity-50 transition-colors"
+        >
+          {testing && <Loader2 className="h-4 w-4 animate-spin" />}
+          Test Connection
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { getToken } = useAuth()
 
@@ -695,8 +883,9 @@ export default function SettingsPage() {
   const labelCls = 'mb-1 block text-sm font-medium text-slate-300'
 
   const TABS = [
-    { id: 'ad',    label: 'AD Connection' },
-    { id: 'entra', label: 'Entra' },
+    { id: 'ad',       label: 'AD Connection' },
+    { id: 'entra',    label: 'Entra' },
+    { id: 'exchange', label: 'Exchange' },
   ]
 
   return (
@@ -890,6 +1079,13 @@ export default function SettingsPage() {
         <div className="p-8">
           <EntraSection authHeaders={authHeaders} />
           <LicensesSection authHeaders={authHeaders} />
+        </div>
+      )}
+
+      {/* ── Exchange tab ── */}
+      {activeTab === 'exchange' && (
+        <div className="max-w-xl p-8">
+          <ExchangePSSection authHeaders={authHeaders} />
         </div>
       )}
 

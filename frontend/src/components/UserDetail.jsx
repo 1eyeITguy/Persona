@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from 'react'
-import { X, Loader2, AlertCircle, User, Search, Monitor } from 'lucide-react'
+import { X, Loader2, AlertCircle, User, Search, Monitor, AlertTriangle } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 import { getInitials, formatDate } from '../utils.js'
 import teamsIconUrl from '../assets/teams-icon.jpg'
+import ExchangeTab from './ExchangeTab.jsx'
 
 // ---------------------------------------------------------------------------
 // Status badge (supports optional label prefix like "AD:" or "Entra:")
@@ -117,6 +118,7 @@ const TABS = [
   { id: 'organization', label: 'Organization' },
   { id: 'member-of',    label: 'Member Of' },
   { id: 'devices',      label: 'Devices' },
+  { id: 'exchange',     label: 'Exchange' },
   { id: 'attributes',   label: 'Attributes' },
 ]
 
@@ -1671,9 +1673,16 @@ function DevicesTab({ userDn, isSynced, entraObjectId, getToken }) {
 // Tab: Attributes (raw LDAP + advanced object metadata)
 // ---------------------------------------------------------------------------
 
-function AttributesTab({ user }) {
+// Exchange attributes suppressed when SOA is stale_ad_attrs
+const STALE_EXCHANGE_ATTRS = [
+  'mail', 'proxyAddresses', 'msExchHomeServerName', 'homeMDB',
+  'msExchMailboxGuid', 'msExchRecipientTypeDetails', 'msExchRecipientDisplayType',
+]
+
+function AttributesTab({ user, exchangeSoa }) {
   const [filter, setFilter] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [staleWarningDismissed, setStaleWarningDismissed] = useState(false)
 
   const entries = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -1684,6 +1693,32 @@ function AttributesTab({ user }) {
 
   return (
     <div className="flex flex-col gap-3">
+      {/* STALE_AD_ATTRS warning banner */}
+      {exchangeSoa === 'stale_ad_attrs' && !staleWarningDismissed && (
+        <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-warning">Some attributes are stale</p>
+              <p className="mt-0.5 text-xs text-slate-400">
+                This user's mailbox was migrated to Exchange Online. The following AD attributes
+                are frozen at migration time and no longer reflect current data:{' '}
+                <span className="font-mono">{STALE_EXCHANGE_ATTRS.join(', ')}</span>.
+                See the <button
+                  className="text-brand-primary hover:underline"
+                  onClick={() => {/* tab switching is handled by parent */}}
+                >Exchange tab</button> for current data.
+              </p>
+            </div>
+            <button
+              onClick={() => setStaleWarningDismissed(true)}
+              className="text-slate-500 hover:text-slate-300 text-lg leading-none"
+              aria-label="Dismiss"
+            >×</button>
+          </div>
+        </div>
+      )}
+
       {/* Advanced object metadata collapsible */}
       <div className="rounded-md border border-border-subtle/50">
         <button
@@ -1802,6 +1837,8 @@ export default function UserDetail({ userDn, mode = 'merged', onClose, onUserSel
   const [error, setError]           = useState(null)
   const [activeTab, setActiveTab]   = useState('identity')
   const [photoError, setPhotoError] = useState(false)
+  // Lifted from ExchangeTab once resolved; used by AttributesTab for STALE warning
+  const [exchangeSoa, setExchangeSoa] = useState(null)
 
   useEffect(() => {
     if (!userDn) return
@@ -1810,6 +1847,7 @@ export default function UserDetail({ userDn, mode = 'merged', onClose, onUserSel
     setLoading(true)
     setActiveTab('identity')
     setPhotoError(false)
+    setExchangeSoa(null)
 
     const token = getToken()
     const endpoint = mode === 'merged'
@@ -1839,7 +1877,8 @@ export default function UserDetail({ userDn, mode = 'merged', onClose, onUserSel
       case 'organization': return <OrganizationTab user={user} onUserSelect={onUserSelect} />
       case 'member-of':    return <MemberOfTab user={user} />
       case 'devices':      return <DevicesTab userDn={userDn} isSynced={user.is_synced} entraObjectId={user.entra_object_id} getToken={getToken} />
-      case 'attributes':   return <AttributesTab user={user} />
+      case 'exchange':     return <ExchangeTab upn={user.upn} getToken={getToken} onSoaResolved={setExchangeSoa} />
+      case 'attributes':   return <AttributesTab user={user} exchangeSoa={exchangeSoa} />
       default:             return null
     }
   }

@@ -105,6 +105,31 @@ def get_license_config() -> dict:
     return config.get("license_config", {})
 
 
+def get_exchange_ps_config() -> dict | None:
+    """
+    Return the exchange_ps section from config.json as a dict, or None if not configured.
+
+    Keys: app_id, tenant_domain, cert_path, cert_thumbprint, cert_expires
+    """
+    config = load_config()
+    exc = config.get("exchange_ps")
+    if not exc or not exc.get("configured", False):
+        return None
+    return exc
+
+
+def is_exchange_ps_configured() -> bool:
+    """True when EXO PowerShell credentials + certificate have been saved."""
+    return get_exchange_ps_config() is not None
+
+
+def save_exchange_ps_config(data: dict) -> None:
+    """Save the exchange_ps section to config.json."""
+    config = load_config()
+    config["exchange_ps"] = {**data, "configured": True}
+    save_config(config)
+
+
 def save_license_config(entries: list[dict]) -> None:
     """
     Merge a list of license config updates into config.json.
