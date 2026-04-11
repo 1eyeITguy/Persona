@@ -273,6 +273,7 @@ def get_entra_user(
         pass  # Sign-in activity is best-effort
 
     # ── 3. MFA methods ─────────────────────────────────────────────────────
+    # Requires UserAuthenticationMethod.Read.All application permission.
     mfa_methods: list[str] = []
     try:
         resp = _requests.get(
@@ -281,9 +282,16 @@ def get_entra_user(
             timeout=10,
         )
         if resp.ok:
-            mfa_methods = _classify_mfa_methods(resp.json().get("value", []))
-    except Exception:
-        pass  # MFA data is best-effort
+            raw_methods = resp.json().get("value", [])
+            logger.debug("MFA methods raw for %s: %s", resolved_id, raw_methods)
+            mfa_methods = _classify_mfa_methods(raw_methods)
+        else:
+            logger.warning(
+                "MFA methods fetch returned HTTP %s for %s: %s",
+                resp.status_code, resolved_id, resp.text[:200],
+            )
+    except Exception as exc:
+        logger.warning("MFA methods fetch error for %s: %s", resolved_id, exc)
 
     # ── 3. License details ─────────────────────────────────────────────────
     licenses: list[str] = []
