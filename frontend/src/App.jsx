@@ -1,3 +1,4 @@
+/* global __APP_VERSION__ */
 import { useState, useRef, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, Outlet, NavLink } from 'react-router-dom'
 import { Settings, Shield, LogOut, Users, Monitor, Loader2 } from 'lucide-react'
@@ -118,7 +119,10 @@ function AppShell() {
           <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-primary">
             <Shield className="h-4 w-4 text-white" />
           </div>
-          <span className="text-lg font-semibold tracking-tight text-white">Persona</span>
+          <div className="flex flex-col">
+            <span className="text-lg font-semibold tracking-tight text-white">Persona</span>
+            <span className="text-[10px] text-slate-500 leading-none">v{__APP_VERSION__}</span>
+          </div>
         </div>
 
         {/* Nav links */}

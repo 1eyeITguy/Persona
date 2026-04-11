@@ -138,21 +138,44 @@ Colors defined in `frontend/src/index.css` and `tailwind.config.js`:
 
 Layout: left sidebar + right content. Login/Setup: centered card. Write operations (Phase 4+) always follow: preview → confirm → execute → audit.
 
+## Versioning
+
+**Single source of truth:** `frontend/package.json` → `version` field.
+Vite injects it at build time as `__APP_VERSION__` (defined in `vite.config.js`). The sidebar and login page read this global at runtime.
+
+**Scheme:** `MAJOR.MINOR.PATCH[-alpha]` (SemVer)
+
+| Branch state | Version in package.json | Example |
+|---|---|---|
+| Active dev (dev branch) | `X.Y.Z-alpha` | `0.3.0-alpha` |
+| Phase complete, merge to main | `X.Y.Z` | `0.3.0` |
+| Next phase begins on dev | `X.(Y+1).0-alpha` | `0.4.0-alpha` |
+
+**The only rule:** when you merge `dev` → `main` for a release, edit `frontend/package.json`, change `"0.3.0-alpha"` to `"0.3.0"`, commit, then tag. That's it — never touch the version between releases.
+
+**Changelog hook:** `.githooks/pre-commit` reminds you to update `CHANGELOG.md` when source files change. Enable once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Git & Release Workflow
 
 ```bash
 # Feature work
-git checkout -b feature/my-feature develop
-# PRs target `develop`, not `main`
+git checkout -b feature/my-feature dev
+# PRs target `dev`, not `main`
 
-# Release
-git checkout main && git merge develop
+# Release (when a phase is complete)
+# 1. Edit frontend/package.json: "0.3.0-alpha" → "0.3.0"
+# 2. Commit and merge to main
+git checkout main && git merge dev
 git tag -a v0.3.0 -m "Release v0.3.0"
 git push origin main --tags
 # GitHub Actions publishes :latest and :v0.3.0 to ghcr.io
 ```
 
-CI: `docker-dev.yml` triggers on push to `develop` → `:dev` image. `docker-publish.yml` triggers on push to `main` or version tags → `:latest` / `:v*.*.*`.
+CI: `docker-dev.yml` triggers on push to `dev` → `:dev` image. `docker-publish.yml` triggers on push to `main` or version tags → `:latest` / `:v*.*.*`.
 
 ## Phase Status
 

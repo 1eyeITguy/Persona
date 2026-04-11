@@ -5,7 +5,18 @@
       "Bash(npm run:*)",
       "Bash(python -m py_compile backend/models/schemas.py backend/auth/ldap.py backend/routes/settings.py)",
       "Bash(xargs ls:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(chmod +x:*)",
+      "Bash(wc -l /c/git/personal/Persona/frontend/src/components/*.jsx)",
+      "Bash(grep:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(git -C /c/git/personal/Persona log --oneline files.zip)",
+      "Bash(unzip -l /c/git/personal/Persona/files.zip)",
+      "Bash(sed -n '7,12p' /c/git/personal/Persona/frontend/src/components/SearchResults.jsx)",
+      "Bash(sed -n '10,15p' /c/git/personal/Persona/frontend/src/components/UserDetail.jsx)",
+      "Bash(sed -n '17,28p' /c/git/personal/Persona/frontend/src/components/UserDetail.jsx)",
+      "Bash(sed -n '10,18p' /c/git/personal/Persona/frontend/src/components/DeviceDetail.jsx)"
     ]
   }
 }

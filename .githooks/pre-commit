@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit
+# Reminds you to update CHANGELOG.md on meaningful commits.
+# Does NOT block the commit — use --no-verify only when the omission is intentional.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+
+STAGED=$(git diff --cached --name-only)
+
+if echo "$STAGED" | grep -q "CHANGELOG.md"; then
+  exit 0
+fi
+
+# Only warn when actual source files are changing (skip docs-only, config, etc.)
+SOURCE_CHANGED=$(echo "$STAGED" | grep -E '\.(py|jsx?|tsx?|css|html)$')
+
+if [ -n "$SOURCE_CHANGED" ]; then
+  echo ""
+  echo "  REMINDER: CHANGELOG.md was not staged."
+  echo "  If this change is user-visible, please update CHANGELOG.md."
+  echo "  To skip this check: git commit --no-verify"
+  echo ""
+fi
+
+exit 0

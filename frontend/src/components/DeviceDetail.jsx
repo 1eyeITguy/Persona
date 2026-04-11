@@ -2,20 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { X, Loader2, AlertCircle, Monitor, Search } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatDate(value) {
-  if (!value) return null
-  if (value === 'Never') return 'Never'
-  try {
-    return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-  } catch {
-    return value
-  }
-}
+import { formatDate } from '../utils.js'
 
 // ---------------------------------------------------------------------------
 // Shared display components (mirror UserDetail conventions)

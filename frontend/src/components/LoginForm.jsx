@@ -4,6 +4,8 @@ import axios from 'axios'
 import { Shield, Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext.jsx'
 
+/* global __APP_VERSION__ */
+
 function Logo() {
   return (
     <div className="flex flex-col items-center mb-8 gap-3">
@@ -11,6 +13,7 @@ function Logo() {
         <Shield className="h-7 w-7 text-white" />
       </div>
       <span className="text-2xl font-bold tracking-tight text-white">Persona</span>
+      <span className="text-xs text-slate-500">v{__APP_VERSION__}</span>
     </div>
   )
 }

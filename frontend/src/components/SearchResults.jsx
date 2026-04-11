@@ -1,15 +1,5 @@
 import { Loader2, Search } from 'lucide-react'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getInitials(name) {
-  if (!name) return '?'
-  const parts = name.trim().split(/\s+/)
-  if (parts.length === 1) return parts[0][0].toUpperCase()
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-}
+import { getInitials } from '../utils.js'
 
 function statusChip(status) {
   if (status === 'Disabled')   return 'text-slate-400 bg-slate-400/10'

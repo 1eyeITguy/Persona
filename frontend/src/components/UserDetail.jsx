@@ -2,30 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { X, Loader2, AlertCircle, User, Search } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getInitials(name) {
-  if (!name) return '?'
-  const parts = name.trim().split(/\s+/)
-  if (parts.length === 1) return parts[0][0].toUpperCase()
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-}
-
-function formatDate(value) {
-  if (!value) return null
-  if (value === 'Never') return 'Never'
-  try {
-    return new Date(value).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    })
-  } catch {
-    return value
-  }
-}
+import { getInitials, formatDate } from '../utils.js'
 
 // ---------------------------------------------------------------------------
 // Status badge

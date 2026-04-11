@@ -5,7 +5,11 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
-## [Unreleased — dev branch]
+## [0.3.0-alpha] — dev branch (Phase 2 in progress)
+
+### Added
+- Version number displayed on login page and sidebar (injected from package.json at build time)
+- `.githooks/pre-commit` — shared changelog reminder hook (enable with `git config core.hooksPath .githooks`)
 
 ### Phase 2 — Entra Connect: Programmatic App Registration + Cloud Tab
 
