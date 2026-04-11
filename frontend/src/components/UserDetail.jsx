@@ -3,6 +3,7 @@ import { X, Loader2, AlertCircle, User, Search, Monitor } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 import { getInitials, formatDate } from '../utils.js'
+import teamsIconUrl from '../assets/teams-icon.jpg'
 
 // ---------------------------------------------------------------------------
 // Status badge (supports optional label prefix like "AD:" or "Entra:")
@@ -422,13 +423,15 @@ export function exportCsv(rows, filename) {
   URL.revokeObjectURL(url)
 }
 
-/** Microsoft Teams logo — shown on M365 groups that have a team provisioned. */
+/** Microsoft Teams icon — rendered from the official Teams PNG asset. */
 function TeamsIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" title="Microsoft Teams">
-      <rect width="14" height="14" rx="3" fill="#5059C9"/>
-      <path d="M10 3.5H4V5.2H6.3V10.5H7.7V5.2H10V3.5Z" fill="white"/>
-    </svg>
+    <img
+      src={teamsIconUrl}
+      alt="Microsoft Teams"
+      title="Has Microsoft Teams"
+      className="h-5 w-5 shrink-0 object-contain"
+    />
   )
 }
 
