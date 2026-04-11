@@ -576,6 +576,7 @@ export default function SettingsPage() {
   const [loadingSettings, setLoadingSettings] = useState(true)
   const [testResult, setTestResult] = useState(null)
   const [testLoading, setTestLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState('ad')
   const [saveResult, setSaveResult] = useState(null)
   const [saveLoading, setSaveLoading] = useState(false)
 
@@ -688,8 +689,6 @@ export default function SettingsPage() {
       </div>
     )
   }
-
-  const [activeTab, setActiveTab] = useState('ad')
 
   const inputCls =
     'w-full rounded-md border border-border-subtle bg-app-bg px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary'
