@@ -20,7 +20,8 @@ import requests as _requests
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+_GRAPH_BASE      = "https://graph.microsoft.com/v1.0"
+_GRAPH_BASE_BETA = "https://graph.microsoft.com/beta"
 
 
 def _acquire_token(tenant_id: str, client_id: str, client_secret: str) -> Optional[str]:
@@ -140,12 +141,13 @@ def get_exchange_mailbox_data(
         logger.warning("Exchange mailboxSettings fetch failed for %s: %s", user_id, exc)
 
     # ── 3. Mailbox size (requires Mail.Read) ───────────────────────────────────
-    # Sum the sizeInBytes across all top-level mail folders.
+    # sizeInBytes is only available on the beta mailFolders endpoint, not v1.0.
+    # We use beta exclusively for this one call; the same auth token works.
     try:
         r = _requests.get(
-            f"{_GRAPH_BASE}/users/{user_id}/mailFolders",
+            f"{_GRAPH_BASE_BETA}/users/{user_id}/mailFolders",
             headers=headers,
-            params={"$select": "id,displayName,sizeInBytes,totalItemCount", "$top": "50"},
+            params={"$select": "sizeInBytes", "$top": "50"},
             timeout=15,
         )
         if r.ok:

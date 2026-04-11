@@ -25,10 +25,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import time
 from typing import Optional
+
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[mGKHF]')
 
 logger = logging.getLogger(__name__)
 
@@ -257,10 +260,11 @@ try {{
     # Surface the real PowerShell error so the admin can diagnose without exec'ing into the container
     error_detail = ""
     if stderr:
-        # Extract the most useful line — PowerShell errors are verbose; grab the first non-blank line
-        first_line = next((l.strip() for l in stderr.splitlines() if l.strip()), "")
-        if first_line:
-            error_detail = f" PowerShell error: {first_line}"
+        clean = _ANSI_RE.sub("", stderr).strip()
+        # Grab up to 3 non-empty lines — enough to see the real message without the full stack
+        useful = [l.strip() for l in clean.splitlines() if l.strip()][:3]
+        if useful:
+            error_detail = " PowerShell error: " + " | ".join(useful)
 
     return {
         "success": False,
