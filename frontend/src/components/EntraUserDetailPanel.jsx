@@ -257,7 +257,6 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
           <LicenseCardList
             entraObjectId={data.entra_object_id || selectedUser.entra_object_id}
             assignedLicenses={data.licenses ?? []}
-            getToken={getToken}
           />
         )
 

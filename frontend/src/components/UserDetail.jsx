@@ -222,39 +222,352 @@ function AuthMethodsTab({ user }) {
 }
 
 // ---------------------------------------------------------------------------
+// License assign / unassign modal (shared by LicensesTab + LicenseCardList)
+// ---------------------------------------------------------------------------
+
+/** Generic confirmation dialog — appears above any existing modals. */
+function ConfirmDialog({ title, children, confirmLabel, danger = false, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70" onClick={onCancel}>
+      <div
+        className="w-[420px] rounded-lg border border-border-subtle bg-surface shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-5 py-4">
+          <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
+          <div className="mt-2 text-sm text-slate-400 space-y-1">{children}</div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-border-subtle px-5 py-3">
+          <button
+            onClick={onCancel}
+            className="rounded-md px-3 py-1.5 text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className={`rounded-md px-4 py-1.5 text-xs font-medium text-white transition-colors ${
+              danger
+                ? 'bg-danger hover:bg-danger/80'
+                : 'bg-brand-primary hover:bg-brand-primary/80'
+            }`}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Full-screen modal for managing all tenant licenses.
+ * Pre-checks currently assigned ones; user can check/uncheck to stage changes.
+ */
+function LicenseAssignModal({ currentLicenses, tenantLicenses, tenantLoading, saving, onClose, onApply }) {
+  const assignedSkuIds = new Set(currentLicenses.map(l => l.sku_id))
+
+  // selections: sku_id → true (should be assigned after save)
+  const [selections, setSelections] = useState(
+    () => Object.fromEntries(currentLicenses.map(l => [l.sku_id, true]))
+  )
+  const [q, setQ] = useState('')
+  const [confirming, setConfirming] = useState(false)
+
+  function toggle(skuId, noSeats) {
+    if (noSeats) return
+    setSelections(prev => ({ ...prev, [skuId]: !prev[skuId] }))
+  }
+
+  const filtered = (tenantLicenses ?? []).filter(t =>
+    !q || t.display_name.toLowerCase().includes(q.toLowerCase()) ||
+          t.sku_part_number.toLowerCase().includes(q.toLowerCase())
+  )
+
+  const toAdd    = (tenantLicenses ?? []).filter(t => selections[t.sku_id] && !assignedSkuIds.has(t.sku_id)).map(t => t.sku_id)
+  const toRemove = currentLicenses.filter(l => !selections[l.sku_id]).map(l => l.sku_id)
+  const hasChanges = toAdd.length > 0 || toRemove.length > 0
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+      onClick={onClose}
+    >
+      <div
+        className="flex w-[540px] max-h-[80vh] flex-col rounded-lg border border-border-subtle bg-surface shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex shrink-0 items-center justify-between border-b border-border-subtle px-5 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-200">Manage Licenses</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Check to assign · uncheck to remove</p>
+          </div>
+          <button onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-white/5 hover:text-slate-200">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="shrink-0 border-b border-border-subtle px-4 py-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              placeholder="Search licenses…"
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              className="w-full rounded-md border border-border-subtle bg-app-bg py-1.5 pl-8 pr-3 text-sm text-slate-200 placeholder:text-slate-500 focus:border-brand-primary focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {/* License list */}
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          {tenantLoading && (
+            <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />Loading licenses…
+            </div>
+          )}
+          {!tenantLoading && filtered.length === 0 && (
+            <p className="py-6 text-center text-sm text-slate-500">No licenses match &ldquo;{q}&rdquo;</p>
+          )}
+          <ul className="space-y-2">
+            {filtered.map(lic => {
+              const isAssigned = assignedSkuIds.has(lic.sku_id)
+              const isSelected = selections[lic.sku_id] ?? false
+              const noSeats    = lic.available === 0 && !isAssigned
+              const willAdd    = isSelected && !isAssigned
+              const willRemove = !isSelected && isAssigned
+
+              return (
+                <li
+                  key={lic.sku_id}
+                  onClick={() => toggle(lic.sku_id, noSeats)}
+                  title={noSeats ? 'No available seats in tenant' : undefined}
+                  className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors ${
+                    noSeats     ? 'cursor-not-allowed border-border-subtle/30 bg-app-bg/30 opacity-40' :
+                    willAdd     ? 'border-success/40 bg-success/5' :
+                    willRemove  ? 'border-danger/30 bg-danger/5' :
+                    isSelected  ? 'border-brand-primary/40 bg-brand-primary/10' :
+                                  'border-border-subtle bg-app-bg/60 hover:border-slate-600'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    disabled={noSeats}
+                    onChange={() => toggle(lic.sku_id, noSeats)}
+                    onClick={e => e.stopPropagation()}
+                    className="mt-0.5 accent-brand-primary shrink-0 disabled:cursor-not-allowed"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
+                    <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      <span className={lic.available === 0 ? 'text-warning' : ''}>
+                        {lic.assigned.toLocaleString()} assigned
+                      </span>
+                      {' · '}
+                      <span className={lic.available === 0 ? 'text-warning' : 'text-success'}>
+                        {lic.available.toLocaleString()} available
+                      </span>
+                      {' of '}{lic.total.toLocaleString()} total
+                    </p>
+                  </div>
+                  <div className="shrink-0 flex flex-col items-end gap-1">
+                    {isAssigned && !willRemove && (
+                      <span className="text-[10px] text-brand-primary font-medium">Current</span>
+                    )}
+                    {willAdd    && <span className="text-[10px] text-success font-medium">+ Assign</span>}
+                    {willRemove && <span className="text-[10px] text-danger font-medium">− Remove</span>}
+                    {noSeats    && <span className="text-[10px] text-slate-500">No seats</span>}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+
+        {/* Footer */}
+        <div className="shrink-0 flex items-center justify-between border-t border-border-subtle px-5 py-3">
+          <p className="text-xs text-slate-500">
+            {hasChanges ? (
+              <>
+                {toAdd.length > 0 && <span className="text-success">+{toAdd.length} to assign</span>}
+                {toAdd.length > 0 && toRemove.length > 0 && <span className="mx-1 text-slate-600">·</span>}
+                {toRemove.length > 0 && <span className="text-danger">−{toRemove.length} to remove</span>}
+              </>
+            ) : (
+              'No changes'
+            )}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              disabled={saving}
+              className="rounded-md px-3 py-1.5 text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => setConfirming(true)}
+              disabled={!hasChanges || saving}
+              className="flex items-center gap-1.5 rounded-md bg-brand-primary px-4 py-1.5 text-xs font-medium text-white hover:bg-brand-primary/80 disabled:opacity-50 transition-colors"
+            >
+              {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+              Apply Changes
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Confirmation dialog */}
+      {confirming && (() => {
+        const tenantMap = Object.fromEntries((tenantLicenses ?? []).map(t => [t.sku_id, t]))
+        const addNames    = toAdd.map(id => tenantMap[id]?.display_name ?? id)
+        const removeNames = toRemove.map(id => {
+          const cur = currentLicenses.find(l => l.sku_id === id)
+          return cur?.display_name ?? tenantMap[id]?.display_name ?? id
+        })
+        return (
+          <ConfirmDialog
+            title="Confirm License Changes"
+            confirmLabel="Apply Changes"
+            onConfirm={() => { setConfirming(false); onApply(toAdd, toRemove) }}
+            onCancel={() => setConfirming(false)}
+          >
+            {addNames.length > 0 && (
+              <div>
+                <p className="font-medium text-success">Assigning:</p>
+                <ul className="mt-1 ml-3 list-disc space-y-0.5">
+                  {addNames.map(n => <li key={n}>{n}</li>)}
+                </ul>
+              </div>
+            )}
+            {removeNames.length > 0 && (
+              <div>
+                <p className="font-medium text-danger">Removing:</p>
+                <ul className="mt-1 ml-3 list-disc space-y-0.5">
+                  {removeNames.map(n => <li key={n}>{n}</li>)}
+                </ul>
+              </div>
+            )}
+          </ConfirmDialog>
+        )
+      })()}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Tab: Licenses
 // ---------------------------------------------------------------------------
 
 function LicensesTab({ user }) {
   const { getToken } = useAuth()
-  const assignedSkuIds = new Set((user.entra_licenses ?? []).map(l => l.sku_id))
-  const entraObjectId  = user.entra_object_id
+  const entraObjectId = user.entra_object_id
 
-  // Tenant-wide license data (fetched on mount)
+  // Local copy — updated after saves so panel reflects changes immediately
+  const [assigned, setAssigned] = useState(user.entra_licenses ?? [])
+
+  // For unassign: checkboxes on the main list (checked = marked for removal)
+  const [markedForRemoval, setMarkedForRemoval] = useState(new Set())
+
+  // Modal
+  const [modalOpen, setModalOpen]         = useState(false)
   const [tenantLicenses, setTenantLicenses] = useState(null)
   const [tenantLoading, setTenantLoading]   = useState(false)
 
-  // Pending checkbox state — tracks changes from the original assignment
-  // key: sku_id, value: true (assign) | false (unassign)
-  const [pending, setPending] = useState({})
+  // Action state
+  const [saving, setSaving]           = useState(false)
+  const [error, setError]             = useState(null)
+  const [success, setSuccess]         = useState(null)
+  const [confirmUnassign, setConfirmUnassign] = useState(false)
 
-  // Save state
-  const [saving, setSaving]     = useState(false)
-  const [saveError, setSaveError] = useState(null)
-  const [saveOk, setSaveOk]     = useState(false)
-
-  useEffect(() => {
-    if (!user.is_synced) return
+  function fetchTenant() {
     setTenantLoading(true)
     const token = getToken()
     axios
-      .get('/api/v1/entra/licenses', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
+      .get('/api/v1/entra/licenses', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
       .then(res => setTenantLicenses(res.data))
-      .catch(() => setTenantLicenses([]))  // non-fatal — show without counts
+      .catch(() => setTenantLicenses([]))
       .finally(() => setTenantLoading(false))
-  }, [user.entra_object_id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }
+
+  function openModal() {
+    if (!tenantLicenses) fetchTenant()
+    setModalOpen(true)
+    setError(null)
+    setSuccess(null)
+  }
+
+  function toggleRemoval(skuId) {
+    setMarkedForRemoval(prev => {
+      const next = new Set(prev)
+      next.has(skuId) ? next.delete(skuId) : next.add(skuId)
+      return next
+    })
+    setError(null)
+    setSuccess(null)
+  }
+
+  async function callApi(toAdd, toRemove) {
+    const token = getToken()
+    const params = new URLSearchParams()
+    toAdd.forEach(id => params.append('add', id))
+    toRemove.forEach(id => params.append('remove', id))
+    await axios.post(
+      `/api/v1/entra/users/${encodeURIComponent(entraObjectId)}/assign-licenses?${params}`,
+      null,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+    )
+    // Refresh tenant counts
+    const res = await axios.get('/api/v1/entra/licenses', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    setTenantLicenses(res.data)
+  }
+
+  async function handleUnassign() {
+    if (!markedForRemoval.size) return
+    setSaving(true)
+    setError(null)
+    try {
+      await callApi([], [...markedForRemoval])
+      setAssigned(prev => prev.filter(l => !markedForRemoval.has(l.sku_id)))
+      setMarkedForRemoval(new Set())
+      setSuccess(`${markedForRemoval.size} license${markedForRemoval.size !== 1 ? 's' : ''} removed.`)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to remove licenses.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleModalApply(toAdd, toRemove) {
+    if (!toAdd.length && !toRemove.length) { setModalOpen(false); return }
+    setSaving(true)
+    setError(null)
+    try {
+      await callApi(toAdd, toRemove)
+      // Build updated assigned list
+      const tenantMap = Object.fromEntries((tenantLicenses ?? []).map(t => [t.sku_id, t]))
+      const afterRemove = assigned.filter(l => !toRemove.includes(l.sku_id))
+      const newLicenses = toAdd
+        .map(id => tenantMap[id])
+        .filter(Boolean)
+        .map(t => ({ sku_id: t.sku_id, sku_part_number: t.sku_part_number, display_name: t.display_name }))
+      setAssigned([...afterRemove, ...newLicenses])
+      setMarkedForRemoval(new Set())
+      setModalOpen(false)
+      setSuccess('Licenses updated.')
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to update licenses.')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   if (!user.is_synced) {
     return (
@@ -264,198 +577,112 @@ function LicensesTab({ user }) {
     )
   }
 
-  // Build a map from sku_id → tenant counts for display
-  const tenantMap = Object.fromEntries(
-    (tenantLicenses ?? []).map(l => [l.sku_id, l])
-  )
-
-  // Merge user licenses + all tenant licenses into one list
-  // Show assigned licenses first, then available-to-assign
-  const userLicenses = user.entra_licenses ?? []
-  const allLicenses = tenantLicenses
-    ? [
-        ...tenantLicenses.filter(t => assignedSkuIds.has(t.sku_id)),
-        ...tenantLicenses.filter(t => !assignedSkuIds.has(t.sku_id)),
-      ]
-    : userLicenses.map(l => ({ ...l, total: null, assigned: null, available: null }))
-
-  function isChecked(skuId) {
-    if (skuId in pending) return pending[skuId]
-    return assignedSkuIds.has(skuId)
-  }
-
-  function toggleLicense(skuId) {
-    const original = assignedSkuIds.has(skuId)
-    setPending(prev => {
-      const next = { ...prev }
-      if (next[skuId] === undefined) {
-        next[skuId] = !original
-      } else if (next[skuId] === original) {
-        delete next[skuId]  // reverted to original — remove from pending
-      } else {
-        delete next[skuId]
-      }
-      return next
-    })
-    setSaveOk(false)
-    setSaveError(null)
-  }
-
-  const toAdd    = Object.entries(pending).filter(([, v]) => v).map(([k]) => k)
-  const toRemove = Object.entries(pending).filter(([, v]) => !v).map(([k]) => k)
-  const hasPending = toAdd.length > 0 || toRemove.length > 0
-
-  async function handleSave() {
-    if (!hasPending || !entraObjectId) return
-    setSaving(true)
-    setSaveError(null)
-    setSaveOk(false)
-    const token = getToken()
-    const params = new URLSearchParams()
-    toAdd.forEach(id => params.append('add', id))
-    toRemove.forEach(id => params.append('remove', id))
-    try {
-      await axios.post(
-        `/api/v1/entra/users/${encodeURIComponent(entraObjectId)}/assign-licenses?${params}`,
-        null,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
-      )
-      setSaveOk(true)
-      setPending({})
-      // Refresh tenant counts
-      const res = await axios.get('/api/v1/entra/licenses', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-      setTenantLicenses(res.data)
-    } catch (err) {
-      setSaveError(err.response?.data?.detail || 'License update failed.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   return (
     <div className="space-y-3">
-      {/* Pending action bar */}
-      {(hasPending || saveOk || saveError) && (
-        <div className={`flex items-center justify-between rounded-md border px-3 py-2 ${
-          saveError
-            ? 'border-danger/30 bg-danger/5'
-            : saveOk
-            ? 'border-success/30 bg-success/5'
-            : 'border-brand-primary/30 bg-brand-primary/5'
-        }`}>
-          <span className="text-xs text-slate-300">
-            {saveError ? (
-              <span className="text-danger">{saveError}</span>
-            ) : saveOk ? (
-              <span className="text-success">Licenses updated successfully.</span>
-            ) : (
-              <>
-                {toAdd.length > 0 && <span className="text-success">+{toAdd.length} to assign </span>}
-                {toRemove.length > 0 && <span className="text-danger">−{toRemove.length} to remove</span>}
-              </>
-            )}
-          </span>
-          {hasPending && (
-            <div className="flex gap-2">
-              <button
-                onClick={() => { setPending({}); setSaveError(null); setSaveOk(false) }}
-                disabled={saving}
-                className="rounded px-2 py-0.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="flex items-center gap-1 rounded bg-brand-primary px-3 py-0.5 text-xs font-medium text-white hover:bg-brand-primary/80 disabled:opacity-60 transition-colors"
-              >
-                {saving && <Loader2 className="h-3 w-3 animate-spin" />}
-                Save changes
-              </button>
-            </div>
-          )}
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-slate-500">
+          {assigned.length} license{assigned.length !== 1 ? 's' : ''} assigned
+        </p>
+        <button
+          onClick={openModal}
+          className="flex items-center gap-1.5 rounded-md border border-brand-primary/40 bg-brand-primary/10 px-3 py-1.5 text-xs font-medium text-brand-primary transition-colors hover:bg-brand-primary/20"
+        >
+          + Assign Additional License
+        </button>
+      </div>
+
+      {/* Status messages */}
+      {error && (
+        <div className="flex items-center gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />{error}
+        </div>
+      )}
+      {success && !error && (
+        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-xs text-success">
+          {success}
         </div>
       )}
 
-      {/* License cards */}
-      {tenantLoading && (
-        <div className="flex items-center gap-2 text-sm text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading license data…
-        </div>
-      )}
+      {/* Assigned license list */}
+      {!assigned.length ? (
+        <p className="text-sm text-slate-500">No licenses assigned.</p>
+      ) : (
+        <>
+          <ul className="space-y-2">
+            {assigned.map(lic => {
+              const marked = markedForRemoval.has(lic.sku_id)
+              return (
+                <li
+                  key={lic.sku_id}
+                  onClick={() => toggleRemoval(lic.sku_id)}
+                  className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors ${
+                    marked
+                      ? 'border-danger/40 bg-danger/5'
+                      : 'border-brand-primary/30 bg-brand-primary/5 hover:border-brand-primary/50'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={marked}
+                    onChange={() => toggleRemoval(lic.sku_id)}
+                    onClick={e => e.stopPropagation()}
+                    className="mt-0.5 accent-danger shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
+                    <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
+                  </div>
+                  {marked && <span className="shrink-0 text-xs font-medium text-danger">− Remove</span>}
+                </li>
+              )
+            })}
+          </ul>
 
-      {!tenantLoading && allLicenses.length === 0 && (
-        <p className="text-sm text-slate-500">No licenses found in this tenant.</p>
-      )}
-
-      <ul className="space-y-2">
-        {allLicenses.map(lic => {
-          const checked   = isChecked(lic.sku_id)
-          const changed   = lic.sku_id in pending
-          const tenant    = tenantMap[lic.sku_id]
-          const noSeats   = tenant && tenant.available === 0 && !assignedSkuIds.has(lic.sku_id)
-
-          return (
-            <li
-              key={lic.sku_id}
-              onClick={() => !noSeats && toggleLicense(lic.sku_id)}
-              className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors ${
-                noSeats
-                  ? 'cursor-not-allowed border-border-subtle/30 bg-app-bg/30 opacity-50'
-                  : checked
-                  ? changed
-                    ? 'border-success/40 bg-success/5'
-                    : 'border-brand-primary/40 bg-brand-primary/10'
-                  : changed
-                  ? 'border-danger/30 bg-danger/5'
-                  : 'border-border-subtle bg-app-bg/60 hover:border-slate-600'
-              }`}
+          {/* Unassign button */}
+          {markedForRemoval.size > 0 && (
+            <button
+              onClick={() => setConfirmUnassign(true)}
+              disabled={saving}
+              className="flex w-full items-center justify-center gap-1.5 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-medium text-danger hover:bg-danger/20 disabled:opacity-60 transition-colors"
             >
-              {/* Checkbox */}
-              <input
-                type="checkbox"
-                checked={checked}
-                disabled={noSeats}
-                onChange={() => !noSeats && toggleLicense(lic.sku_id)}
-                onClick={e => e.stopPropagation()}
-                className="mt-0.5 accent-brand-primary shrink-0 disabled:cursor-not-allowed"
-              />
+              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Unassign {markedForRemoval.size} License{markedForRemoval.size !== 1 ? 's' : ''}
+            </button>
+          )}
+        </>
+      )}
 
-              {/* Info */}
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
-                <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
-                {tenant && (
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    <span className={tenant.available === 0 ? 'text-warning' : 'text-slate-500'}>
-                      {tenant.assigned.toLocaleString()} assigned
-                    </span>
-                    {' · '}
-                    <span className={tenant.available === 0 ? 'text-warning' : 'text-success'}>
-                      {tenant.available.toLocaleString()} available
-                    </span>
-                    {' of '}
-                    {tenant.total.toLocaleString()} total
-                  </p>
-                )}
-              </div>
+      {/* Unassign confirmation */}
+      {confirmUnassign && (
+        <ConfirmDialog
+          title="Confirm License Removal"
+          confirmLabel="Unassign"
+          danger
+          onConfirm={() => { setConfirmUnassign(false); handleUnassign() }}
+          onCancel={() => setConfirmUnassign(false)}
+        >
+          <p>Remove the following license{markedForRemoval.size !== 1 ? 's' : ''} from this user?</p>
+          <ul className="mt-1 ml-3 list-disc space-y-0.5">
+            {assigned
+              .filter(l => markedForRemoval.has(l.sku_id))
+              .map(l => <li key={l.sku_id}>{l.display_name}</li>)
+            }
+          </ul>
+        </ConfirmDialog>
+      )}
 
-              {/* Change indicator */}
-              {changed && (
-                <span className={`shrink-0 text-xs font-medium ${checked ? 'text-success' : 'text-danger'}`}>
-                  {checked ? '+ Assign' : '− Remove'}
-                </span>
-              )}
-              {noSeats && (
-                <span className="shrink-0 text-xs text-slate-500">No seats</span>
-              )}
-            </li>
-          )
-        })}
-      </ul>
+      {/* Modal */}
+      {modalOpen && (
+        <LicenseAssignModal
+          currentLicenses={assigned}
+          tenantLicenses={tenantLicenses}
+          tenantLoading={tenantLoading}
+          saving={saving}
+          onClose={() => { setModalOpen(false); setError(null) }}
+          onApply={handleModalApply}
+        />
+      )}
     </div>
   )
 }
@@ -1072,179 +1299,135 @@ const COMPLIANCE_STYLES = {
 }
 
 // ---------------------------------------------------------------------------
-// Exported: standalone license card list (reused by EntraUserDetailPanel)
+// Exported: standalone license manager (reused by EntraUserDetailPanel)
 // ---------------------------------------------------------------------------
 
 /**
- * Assign/unassign license cards for a cloud-only Entra user.
- * Requires the user's Entra object ID and current license list.
+ * Same assign/unassign UX as LicensesTab but for cloud-only Entra users.
+ * Accepts entraObjectId + initial assignedLicenses as props.
  */
-export function LicenseCardList({ entraObjectId, assignedLicenses = [], getToken }) {
-  const assignedSkuIds = new Set(assignedLicenses.map(l => l.sku_id))
+export function LicenseCardList({ entraObjectId, assignedLicenses = [] }) {
+  const { getToken } = useAuth()
+  const [assigned, setAssigned]             = useState(assignedLicenses)
+  const [markedForRemoval, setMarkedForRemoval] = useState(new Set())
+  const [modalOpen, setModalOpen]           = useState(false)
+  const [confirmUnassign, setConfirmUnassign] = useState(false)
   const [tenantLicenses, setTenantLicenses] = useState(null)
   const [tenantLoading, setTenantLoading]   = useState(false)
-  const [pending, setPending]               = useState({})
   const [saving, setSaving]                 = useState(false)
-  const [saveError, setSaveError]           = useState(null)
-  const [saveOk, setSaveOk]                 = useState(false)
+  const [error, setError]                   = useState(null)
+  const [success, setSuccess]               = useState(null)
 
-  useEffect(() => {
-    if (!entraObjectId) return
+  function fetchTenant() {
     setTenantLoading(true)
     const token = getToken()
-    axios
-      .get('/api/v1/entra/licenses', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
+    axios.get('/api/v1/entra/licenses', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
       .then(res => setTenantLicenses(res.data))
       .catch(() => setTenantLicenses([]))
       .finally(() => setTenantLoading(false))
-  }, [entraObjectId]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const tenantMap = Object.fromEntries(
-    (tenantLicenses ?? []).map(l => [l.sku_id, l])
-  )
-
-  const allLicenses = tenantLicenses
-    ? [
-        ...tenantLicenses.filter(t => assignedSkuIds.has(t.sku_id)),
-        ...tenantLicenses.filter(t => !assignedSkuIds.has(t.sku_id)),
-      ]
-    : assignedLicenses.map(l => ({ ...l, total: null, assigned: null, available: null }))
-
-  function isChecked(skuId) {
-    if (skuId in pending) return pending[skuId]
-    return assignedSkuIds.has(skuId)
   }
 
-  function toggleLicense(skuId) {
-    const original = assignedSkuIds.has(skuId)
-    setPending(prev => {
-      const next = { ...prev }
-      if (next[skuId] === undefined) { next[skuId] = !original }
-      else { delete next[skuId] }
-      return next
-    })
-    setSaveOk(false)
-    setSaveError(null)
-  }
-
-  const toAdd    = Object.entries(pending).filter(([, v]) => v).map(([k]) => k)
-  const toRemove = Object.entries(pending).filter(([, v]) => !v).map(([k]) => k)
-  const hasPending = toAdd.length > 0 || toRemove.length > 0
-
-  async function handleSave() {
-    if (!hasPending || !entraObjectId) return
-    setSaving(true)
-    setSaveError(null)
+  async function callApi(toAdd, toRemove) {
     const token = getToken()
     const params = new URLSearchParams()
     toAdd.forEach(id => params.append('add', id))
     toRemove.forEach(id => params.append('remove', id))
+    await axios.post(
+      `/api/v1/entra/users/${encodeURIComponent(entraObjectId)}/assign-licenses?${params}`,
+      null, { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+    )
+    const res = await axios.get('/api/v1/entra/licenses', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    setTenantLicenses(res.data)
+  }
+
+  async function handleUnassign() {
+    if (!markedForRemoval.size) return
+    setSaving(true); setError(null)
     try {
-      await axios.post(
-        `/api/v1/entra/users/${encodeURIComponent(entraObjectId)}/assign-licenses?${params}`,
-        null,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
-      )
-      setSaveOk(true)
-      setPending({})
-      const res = await axios.get('/api/v1/entra/licenses', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-      setTenantLicenses(res.data)
-    } catch (err) {
-      setSaveError(err.response?.data?.detail || 'License update failed.')
-    } finally {
-      setSaving(false)
-    }
+      await callApi([], [...markedForRemoval])
+      setAssigned(prev => prev.filter(l => !markedForRemoval.has(l.sku_id)))
+      setMarkedForRemoval(new Set())
+      setSuccess(`${markedForRemoval.size} license${markedForRemoval.size !== 1 ? 's' : ''} removed.`)
+    } catch (err) { setError(err.response?.data?.detail || 'Failed to remove licenses.') }
+    finally { setSaving(false) }
+  }
+
+  async function handleModalApply(toAdd, toRemove) {
+    if (!toAdd.length && !toRemove.length) { setModalOpen(false); return }
+    setSaving(true); setError(null)
+    try {
+      await callApi(toAdd, toRemove)
+      const tenantMap = Object.fromEntries((tenantLicenses ?? []).map(t => [t.sku_id, t]))
+      const afterRemove = assigned.filter(l => !toRemove.includes(l.sku_id))
+      const newLics = toAdd.map(id => tenantMap[id]).filter(Boolean)
+        .map(t => ({ sku_id: t.sku_id, sku_part_number: t.sku_part_number, display_name: t.display_name }))
+      setAssigned([...afterRemove, ...newLics])
+      setMarkedForRemoval(new Set()); setModalOpen(false); setSuccess('Licenses updated.')
+    } catch (err) { setError(err.response?.data?.detail || 'Failed to update licenses.') }
+    finally { setSaving(false) }
   }
 
   return (
     <div className="space-y-3">
-      {(hasPending || saveOk || saveError) && (
-        <div className={`flex items-center justify-between rounded-md border px-3 py-2 ${
-          saveError ? 'border-danger/30 bg-danger/5' :
-          saveOk    ? 'border-success/30 bg-success/5' :
-                      'border-brand-primary/30 bg-brand-primary/5'
-        }`}>
-          <span className="text-xs text-slate-300">
-            {saveError ? <span className="text-danger">{saveError}</span>
-            : saveOk   ? <span className="text-success">Licenses updated successfully.</span>
-            : <>
-                {toAdd.length > 0 && <span className="text-success">+{toAdd.length} to assign </span>}
-                {toRemove.length > 0 && <span className="text-danger">−{toRemove.length} to remove</span>}
-              </>}
-          </span>
-          {hasPending && (
-            <div className="flex gap-2">
-              <button onClick={() => { setPending({}); setSaveError(null); setSaveOk(false) }}
-                disabled={saving} className="rounded px-2 py-0.5 text-xs text-slate-400 hover:text-slate-200 transition-colors">
-                Cancel
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-slate-500">{assigned.length} license{assigned.length !== 1 ? 's' : ''} assigned</p>
+        <button onClick={() => { if (!tenantLicenses) fetchTenant(); setModalOpen(true); setError(null); setSuccess(null) }}
+          className="flex items-center gap-1.5 rounded-md border border-brand-primary/40 bg-brand-primary/10 px-3 py-1.5 text-xs font-medium text-brand-primary transition-colors hover:bg-brand-primary/20">
+          + Assign Additional License
+        </button>
+      </div>
+      {error && <div className="flex items-center gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"><AlertCircle className="h-3.5 w-3.5 shrink-0"/>{error}</div>}
+      {success && !error && <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-xs text-success">{success}</div>}
+      {!assigned.length
+        ? <p className="text-sm text-slate-500">No licenses assigned.</p>
+        : <>
+            <ul className="space-y-2">
+              {assigned.map(lic => {
+                const marked = markedForRemoval.has(lic.sku_id)
+                return (
+                  <li key={lic.sku_id} onClick={() => { setMarkedForRemoval(prev => { const n = new Set(prev); n.has(lic.sku_id) ? n.delete(lic.sku_id) : n.add(lic.sku_id); return n }); setError(null); setSuccess(null) }}
+                    className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors ${marked ? 'border-danger/40 bg-danger/5' : 'border-brand-primary/30 bg-brand-primary/5 hover:border-brand-primary/50'}`}>
+                    <input type="checkbox" checked={marked} onChange={() => {}} onClick={e => e.stopPropagation()} className="mt-0.5 accent-danger shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
+                      <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
+                    </div>
+                    {marked && <span className="shrink-0 text-xs font-medium text-danger">− Remove</span>}
+                  </li>
+                )
+              })}
+            </ul>
+            {markedForRemoval.size > 0 && (
+              <button onClick={() => setConfirmUnassign(true)} disabled={saving}
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-medium text-danger hover:bg-danger/20 disabled:opacity-60 transition-colors">
+                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Unassign {markedForRemoval.size} License{markedForRemoval.size !== 1 ? 's' : ''}
               </button>
-              <button onClick={handleSave} disabled={saving}
-                className="flex items-center gap-1 rounded bg-brand-primary px-3 py-0.5 text-xs font-medium text-white hover:bg-brand-primary/80 disabled:opacity-60 transition-colors">
-                {saving && <Loader2 className="h-3 w-3 animate-spin" />}
-                Save changes
-              </button>
-            </div>
-          )}
-        </div>
+            )}
+          </>
+      }
+      {confirmUnassign && (
+        <ConfirmDialog
+          title="Confirm License Removal"
+          confirmLabel="Unassign"
+          danger
+          onConfirm={() => { setConfirmUnassign(false); handleUnassign() }}
+          onCancel={() => setConfirmUnassign(false)}
+        >
+          <p>Remove the following license{markedForRemoval.size !== 1 ? 's' : ''} from this user?</p>
+          <ul className="mt-1 ml-3 list-disc space-y-0.5">
+            {assigned
+              .filter(l => markedForRemoval.has(l.sku_id))
+              .map(l => <li key={l.sku_id}>{l.display_name}</li>)
+            }
+          </ul>
+        </ConfirmDialog>
       )}
-
-      {tenantLoading && (
-        <div className="flex items-center gap-2 text-sm text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin" />Loading license data…
-        </div>
+      {modalOpen && (
+        <LicenseAssignModal currentLicenses={assigned} tenantLicenses={tenantLicenses}
+          tenantLoading={tenantLoading} saving={saving}
+          onClose={() => { setModalOpen(false); setError(null) }} onApply={handleModalApply} />
       )}
-
-      <ul className="space-y-2">
-        {allLicenses.map(lic => {
-          const checked  = isChecked(lic.sku_id)
-          const changed  = lic.sku_id in pending
-          const tenant   = tenantMap[lic.sku_id]
-          const noSeats  = tenant && tenant.available === 0 && !assignedSkuIds.has(lic.sku_id)
-          return (
-            <li key={lic.sku_id}
-              onClick={() => !noSeats && toggleLicense(lic.sku_id)}
-              className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors ${
-                noSeats     ? 'cursor-not-allowed border-border-subtle/30 bg-app-bg/30 opacity-50' :
-                checked && changed  ? 'border-success/40 bg-success/5' :
-                checked     ? 'border-brand-primary/40 bg-brand-primary/10' :
-                changed     ? 'border-danger/30 bg-danger/5' :
-                              'border-border-subtle bg-app-bg/60 hover:border-slate-600'
-              }`}
-            >
-              <input type="checkbox" checked={checked} disabled={noSeats}
-                onChange={() => !noSeats && toggleLicense(lic.sku_id)}
-                onClick={e => e.stopPropagation()}
-                className="mt-0.5 accent-brand-primary shrink-0 disabled:cursor-not-allowed" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
-                <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
-                {tenant && (
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    <span className={tenant.available === 0 ? 'text-warning' : 'text-slate-500'}>
-                      {tenant.assigned.toLocaleString()} assigned
-                    </span>
-                    {' · '}
-                    <span className={tenant.available === 0 ? 'text-warning' : 'text-success'}>
-                      {tenant.available.toLocaleString()} available
-                    </span>
-                    {' of '}{tenant.total.toLocaleString()} total
-                  </p>
-                )}
-              </div>
-              {changed && (
-                <span className={`shrink-0 text-xs font-medium ${checked ? 'text-success' : 'text-danger'}`}>
-                  {checked ? '+ Assign' : '− Remove'}
-                </span>
-              )}
-              {noSeats && <span className="shrink-0 text-xs text-slate-500">No seats</span>}
-            </li>
-          )
-        })}
-      </ul>
     </div>
   )
 }
