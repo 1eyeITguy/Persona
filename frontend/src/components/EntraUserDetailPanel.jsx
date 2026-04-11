@@ -3,7 +3,7 @@ import { X, Loader2, AlertCircle, Monitor } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 import { getInitials, formatDate } from '../utils.js'
-import { EntraDeviceCard, CloudGroupsList } from './UserDetail.jsx'
+import { EntraDeviceCard, CloudGroupsList, LicenseCardList } from './UserDetail.jsx'
 
 // ---------------------------------------------------------------------------
 // Shared helpers (local to this component)
@@ -252,25 +252,14 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
         )
       }
 
-      case 'licenses': {
-        const licenses = data.licenses ?? []
+      case 'licenses':
         return (
-          <div>
-            <SectionHeading>Assigned Licenses</SectionHeading>
-            {licenses.length ? (
-              <div className="flex flex-wrap gap-2">
-                {licenses.map(l => (
-                  <span key={l} className="inline-flex items-center rounded-full border border-brand-primary/30 bg-brand-primary/10 px-3 py-1 text-sm text-brand-primary">
-                    {l}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">No licenses assigned.</p>
-            )}
-          </div>
+          <LicenseCardList
+            entraObjectId={data.entra_object_id || selectedUser.entra_object_id}
+            assignedLicenses={data.licenses ?? []}
+            getToken={getToken}
+          />
         )
-      }
 
       case 'contact':
         return (

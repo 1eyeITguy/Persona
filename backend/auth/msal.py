@@ -549,16 +549,21 @@ def get_entra_user(
         pass  # Best-effort — not critical
 
     # ── 3. License details ─────────────────────────────────────────────────
-    licenses: list[str] = []
+    licenses: list[dict] = []
     try:
         resp = _requests.get(
             f"{_GRAPH_BASE}/users/{resolved_id}/licenseDetails",
             headers=headers,
+            params={"$select": "skuId,skuPartNumber"},
             timeout=10,
         )
         if resp.ok:
             licenses = [
-                _friendly_sku(item.get("skuPartNumber", ""))
+                {
+                    "sku_id":          item.get("skuId", ""),
+                    "sku_part_number": item.get("skuPartNumber", ""),
+                    "display_name":    _friendly_sku(item.get("skuPartNumber", "")),
+                }
                 for item in resp.json().get("value", [])
             ]
     except Exception:
@@ -774,6 +779,78 @@ def get_entra_user_devices(
         logger.debug("Entra registered devices fetch error for %s: %s", object_id, exc)
 
     return sorted(devices.values(), key=lambda d: (d.get("display_name") or "").lower())
+
+
+def assign_user_licenses(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    object_id: str,
+    add_sku_ids: list[str],
+    remove_sku_ids: list[str],
+) -> dict:
+    """
+    Assign and/or remove licenses for an Entra user in a single Graph API call.
+
+    Calls POST /users/{id}/assignLicense with addLicenses / removeLicenses.
+    Requires User.ReadWrite.All or Directory.ReadWrite.All application permission.
+
+    Returns {"success": True} or {"success": False, "error": str}.
+    Caller MUST use run_in_threadpool.
+    """
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    try:
+        app = msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=authority,
+        )
+        result = app.acquire_token_for_client(
+            scopes=["https://graph.microsoft.com/.default"]
+        )
+    except Exception:
+        return {"success": False, "error": "Invalid Entra configuration."}
+
+    if "access_token" not in result:
+        err = result.get("error_description") or result.get("error") or "Authentication failed"
+        return {"success": False, "error": err}
+
+    token = result["access_token"]
+    payload = {
+        "addLicenses":    [{"skuId": sid} for sid in add_sku_ids],
+        "removeLicenses": remove_sku_ids,
+    }
+
+    try:
+        resp = _requests.post(
+            f"{_GRAPH_BASE}/users/{object_id}/assignLicense",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=15,
+        )
+        if resp.ok:
+            return {"success": True}
+
+        # Extract a human-readable error from the Graph response
+        try:
+            err_body = resp.json()
+            err_msg = (
+                err_body.get("error", {}).get("message")
+                or err_body.get("error", {}).get("code")
+                or resp.text[:200]
+            )
+        except Exception:
+            err_msg = resp.text[:200]
+
+        logger.warning("assignLicense HTTP %s for %s: %s", resp.status_code, object_id, err_msg)
+        return {"success": False, "error": err_msg}
+
+    except Exception as exc:
+        logger.warning("assignLicense error for %s: %s", object_id, exc)
+        return {"success": False, "error": str(exc)}
 
 
 def get_tenant_licenses(

@@ -226,7 +226,35 @@ function AuthMethodsTab({ user }) {
 // ---------------------------------------------------------------------------
 
 function LicensesTab({ user }) {
-  const licenses = user.entra_licenses ?? []
+  const { getToken } = useAuth()
+  const assignedSkuIds = new Set((user.entra_licenses ?? []).map(l => l.sku_id))
+  const entraObjectId  = user.entra_object_id
+
+  // Tenant-wide license data (fetched on mount)
+  const [tenantLicenses, setTenantLicenses] = useState(null)
+  const [tenantLoading, setTenantLoading]   = useState(false)
+
+  // Pending checkbox state — tracks changes from the original assignment
+  // key: sku_id, value: true (assign) | false (unassign)
+  const [pending, setPending] = useState({})
+
+  // Save state
+  const [saving, setSaving]     = useState(false)
+  const [saveError, setSaveError] = useState(null)
+  const [saveOk, setSaveOk]     = useState(false)
+
+  useEffect(() => {
+    if (!user.is_synced) return
+    setTenantLoading(true)
+    const token = getToken()
+    axios
+      .get('/api/v1/entra/licenses', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      .then(res => setTenantLicenses(res.data))
+      .catch(() => setTenantLicenses([]))  // non-fatal — show without counts
+      .finally(() => setTenantLoading(false))
+  }, [user.entra_object_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!user.is_synced) {
     return (
@@ -236,20 +264,198 @@ function LicensesTab({ user }) {
     )
   }
 
+  // Build a map from sku_id → tenant counts for display
+  const tenantMap = Object.fromEntries(
+    (tenantLicenses ?? []).map(l => [l.sku_id, l])
+  )
+
+  // Merge user licenses + all tenant licenses into one list
+  // Show assigned licenses first, then available-to-assign
+  const userLicenses = user.entra_licenses ?? []
+  const allLicenses = tenantLicenses
+    ? [
+        ...tenantLicenses.filter(t => assignedSkuIds.has(t.sku_id)),
+        ...tenantLicenses.filter(t => !assignedSkuIds.has(t.sku_id)),
+      ]
+    : userLicenses.map(l => ({ ...l, total: null, assigned: null, available: null }))
+
+  function isChecked(skuId) {
+    if (skuId in pending) return pending[skuId]
+    return assignedSkuIds.has(skuId)
+  }
+
+  function toggleLicense(skuId) {
+    const original = assignedSkuIds.has(skuId)
+    setPending(prev => {
+      const next = { ...prev }
+      if (next[skuId] === undefined) {
+        next[skuId] = !original
+      } else if (next[skuId] === original) {
+        delete next[skuId]  // reverted to original — remove from pending
+      } else {
+        delete next[skuId]
+      }
+      return next
+    })
+    setSaveOk(false)
+    setSaveError(null)
+  }
+
+  const toAdd    = Object.entries(pending).filter(([, v]) => v).map(([k]) => k)
+  const toRemove = Object.entries(pending).filter(([, v]) => !v).map(([k]) => k)
+  const hasPending = toAdd.length > 0 || toRemove.length > 0
+
+  async function handleSave() {
+    if (!hasPending || !entraObjectId) return
+    setSaving(true)
+    setSaveError(null)
+    setSaveOk(false)
+    const token = getToken()
+    const params = new URLSearchParams()
+    toAdd.forEach(id => params.append('add', id))
+    toRemove.forEach(id => params.append('remove', id))
+    try {
+      await axios.post(
+        `/api/v1/entra/users/${encodeURIComponent(entraObjectId)}/assign-licenses?${params}`,
+        null,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      )
+      setSaveOk(true)
+      setPending({})
+      // Refresh tenant counts
+      const res = await axios.get('/api/v1/entra/licenses', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      setTenantLicenses(res.data)
+    } catch (err) {
+      setSaveError(err.response?.data?.detail || 'License update failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
-    <div>
-      <SectionHeading>Assigned Licenses</SectionHeading>
-      {licenses.length ? (
-        <div className="flex flex-wrap gap-2">
-          {licenses.map(l => (
-            <span key={l} className="inline-flex items-center rounded-full border border-brand-primary/30 bg-brand-primary/10 px-3 py-1 text-sm text-brand-primary">
-              {l}
-            </span>
-          ))}
+    <div className="space-y-3">
+      {/* Pending action bar */}
+      {(hasPending || saveOk || saveError) && (
+        <div className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+          saveError
+            ? 'border-danger/30 bg-danger/5'
+            : saveOk
+            ? 'border-success/30 bg-success/5'
+            : 'border-brand-primary/30 bg-brand-primary/5'
+        }`}>
+          <span className="text-xs text-slate-300">
+            {saveError ? (
+              <span className="text-danger">{saveError}</span>
+            ) : saveOk ? (
+              <span className="text-success">Licenses updated successfully.</span>
+            ) : (
+              <>
+                {toAdd.length > 0 && <span className="text-success">+{toAdd.length} to assign </span>}
+                {toRemove.length > 0 && <span className="text-danger">−{toRemove.length} to remove</span>}
+              </>
+            )}
+          </span>
+          {hasPending && (
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setPending({}); setSaveError(null); setSaveOk(false) }}
+                disabled={saving}
+                className="rounded px-2 py-0.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="flex items-center gap-1 rounded bg-brand-primary px-3 py-0.5 text-xs font-medium text-white hover:bg-brand-primary/80 disabled:opacity-60 transition-colors"
+              >
+                {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+                Save changes
+              </button>
+            </div>
+          )}
         </div>
-      ) : (
-        <p className="text-sm text-slate-500">No licenses assigned.</p>
       )}
+
+      {/* License cards */}
+      {tenantLoading && (
+        <div className="flex items-center gap-2 text-sm text-slate-500">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading license data…
+        </div>
+      )}
+
+      {!tenantLoading && allLicenses.length === 0 && (
+        <p className="text-sm text-slate-500">No licenses found in this tenant.</p>
+      )}
+
+      <ul className="space-y-2">
+        {allLicenses.map(lic => {
+          const checked   = isChecked(lic.sku_id)
+          const changed   = lic.sku_id in pending
+          const tenant    = tenantMap[lic.sku_id]
+          const noSeats   = tenant && tenant.available === 0 && !assignedSkuIds.has(lic.sku_id)
+
+          return (
+            <li
+              key={lic.sku_id}
+              onClick={() => !noSeats && toggleLicense(lic.sku_id)}
+              className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors ${
+                noSeats
+                  ? 'cursor-not-allowed border-border-subtle/30 bg-app-bg/30 opacity-50'
+                  : checked
+                  ? changed
+                    ? 'border-success/40 bg-success/5'
+                    : 'border-brand-primary/40 bg-brand-primary/10'
+                  : changed
+                  ? 'border-danger/30 bg-danger/5'
+                  : 'border-border-subtle bg-app-bg/60 hover:border-slate-600'
+              }`}
+            >
+              {/* Checkbox */}
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={noSeats}
+                onChange={() => !noSeats && toggleLicense(lic.sku_id)}
+                onClick={e => e.stopPropagation()}
+                className="mt-0.5 accent-brand-primary shrink-0 disabled:cursor-not-allowed"
+              />
+
+              {/* Info */}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
+                <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
+                {tenant && (
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    <span className={tenant.available === 0 ? 'text-warning' : 'text-slate-500'}>
+                      {tenant.assigned.toLocaleString()} assigned
+                    </span>
+                    {' · '}
+                    <span className={tenant.available === 0 ? 'text-warning' : 'text-success'}>
+                      {tenant.available.toLocaleString()} available
+                    </span>
+                    {' of '}
+                    {tenant.total.toLocaleString()} total
+                  </p>
+                )}
+              </div>
+
+              {/* Change indicator */}
+              {changed && (
+                <span className={`shrink-0 text-xs font-medium ${checked ? 'text-success' : 'text-danger'}`}>
+                  {checked ? '+ Assign' : '− Remove'}
+                </span>
+              )}
+              {noSeats && (
+                <span className="shrink-0 text-xs text-slate-500">No seats</span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
@@ -863,6 +1069,184 @@ const COMPLIANCE_STYLES = {
   compliant:    'border-success/20 bg-success/10 text-success',
   noncompliant: 'border-danger/20 bg-danger/10 text-danger',
   unknown:      'border-slate-600/30 bg-slate-700/20 text-slate-400',
+}
+
+// ---------------------------------------------------------------------------
+// Exported: standalone license card list (reused by EntraUserDetailPanel)
+// ---------------------------------------------------------------------------
+
+/**
+ * Assign/unassign license cards for a cloud-only Entra user.
+ * Requires the user's Entra object ID and current license list.
+ */
+export function LicenseCardList({ entraObjectId, assignedLicenses = [], getToken }) {
+  const assignedSkuIds = new Set(assignedLicenses.map(l => l.sku_id))
+  const [tenantLicenses, setTenantLicenses] = useState(null)
+  const [tenantLoading, setTenantLoading]   = useState(false)
+  const [pending, setPending]               = useState({})
+  const [saving, setSaving]                 = useState(false)
+  const [saveError, setSaveError]           = useState(null)
+  const [saveOk, setSaveOk]                 = useState(false)
+
+  useEffect(() => {
+    if (!entraObjectId) return
+    setTenantLoading(true)
+    const token = getToken()
+    axios
+      .get('/api/v1/entra/licenses', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      .then(res => setTenantLicenses(res.data))
+      .catch(() => setTenantLicenses([]))
+      .finally(() => setTenantLoading(false))
+  }, [entraObjectId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tenantMap = Object.fromEntries(
+    (tenantLicenses ?? []).map(l => [l.sku_id, l])
+  )
+
+  const allLicenses = tenantLicenses
+    ? [
+        ...tenantLicenses.filter(t => assignedSkuIds.has(t.sku_id)),
+        ...tenantLicenses.filter(t => !assignedSkuIds.has(t.sku_id)),
+      ]
+    : assignedLicenses.map(l => ({ ...l, total: null, assigned: null, available: null }))
+
+  function isChecked(skuId) {
+    if (skuId in pending) return pending[skuId]
+    return assignedSkuIds.has(skuId)
+  }
+
+  function toggleLicense(skuId) {
+    const original = assignedSkuIds.has(skuId)
+    setPending(prev => {
+      const next = { ...prev }
+      if (next[skuId] === undefined) { next[skuId] = !original }
+      else { delete next[skuId] }
+      return next
+    })
+    setSaveOk(false)
+    setSaveError(null)
+  }
+
+  const toAdd    = Object.entries(pending).filter(([, v]) => v).map(([k]) => k)
+  const toRemove = Object.entries(pending).filter(([, v]) => !v).map(([k]) => k)
+  const hasPending = toAdd.length > 0 || toRemove.length > 0
+
+  async function handleSave() {
+    if (!hasPending || !entraObjectId) return
+    setSaving(true)
+    setSaveError(null)
+    const token = getToken()
+    const params = new URLSearchParams()
+    toAdd.forEach(id => params.append('add', id))
+    toRemove.forEach(id => params.append('remove', id))
+    try {
+      await axios.post(
+        `/api/v1/entra/users/${encodeURIComponent(entraObjectId)}/assign-licenses?${params}`,
+        null,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      )
+      setSaveOk(true)
+      setPending({})
+      const res = await axios.get('/api/v1/entra/licenses', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      setTenantLicenses(res.data)
+    } catch (err) {
+      setSaveError(err.response?.data?.detail || 'License update failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {(hasPending || saveOk || saveError) && (
+        <div className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+          saveError ? 'border-danger/30 bg-danger/5' :
+          saveOk    ? 'border-success/30 bg-success/5' :
+                      'border-brand-primary/30 bg-brand-primary/5'
+        }`}>
+          <span className="text-xs text-slate-300">
+            {saveError ? <span className="text-danger">{saveError}</span>
+            : saveOk   ? <span className="text-success">Licenses updated successfully.</span>
+            : <>
+                {toAdd.length > 0 && <span className="text-success">+{toAdd.length} to assign </span>}
+                {toRemove.length > 0 && <span className="text-danger">−{toRemove.length} to remove</span>}
+              </>}
+          </span>
+          {hasPending && (
+            <div className="flex gap-2">
+              <button onClick={() => { setPending({}); setSaveError(null); setSaveOk(false) }}
+                disabled={saving} className="rounded px-2 py-0.5 text-xs text-slate-400 hover:text-slate-200 transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleSave} disabled={saving}
+                className="flex items-center gap-1 rounded bg-brand-primary px-3 py-0.5 text-xs font-medium text-white hover:bg-brand-primary/80 disabled:opacity-60 transition-colors">
+                {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+                Save changes
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tenantLoading && (
+        <div className="flex items-center gap-2 text-sm text-slate-500">
+          <Loader2 className="h-4 w-4 animate-spin" />Loading license data…
+        </div>
+      )}
+
+      <ul className="space-y-2">
+        {allLicenses.map(lic => {
+          const checked  = isChecked(lic.sku_id)
+          const changed  = lic.sku_id in pending
+          const tenant   = tenantMap[lic.sku_id]
+          const noSeats  = tenant && tenant.available === 0 && !assignedSkuIds.has(lic.sku_id)
+          return (
+            <li key={lic.sku_id}
+              onClick={() => !noSeats && toggleLicense(lic.sku_id)}
+              className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors ${
+                noSeats     ? 'cursor-not-allowed border-border-subtle/30 bg-app-bg/30 opacity-50' :
+                checked && changed  ? 'border-success/40 bg-success/5' :
+                checked     ? 'border-brand-primary/40 bg-brand-primary/10' :
+                changed     ? 'border-danger/30 bg-danger/5' :
+                              'border-border-subtle bg-app-bg/60 hover:border-slate-600'
+              }`}
+            >
+              <input type="checkbox" checked={checked} disabled={noSeats}
+                onChange={() => !noSeats && toggleLicense(lic.sku_id)}
+                onClick={e => e.stopPropagation()}
+                className="mt-0.5 accent-brand-primary shrink-0 disabled:cursor-not-allowed" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-slate-200">{lic.display_name}</p>
+                <p className="truncate text-xs text-slate-600">{lic.sku_part_number}</p>
+                {tenant && (
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    <span className={tenant.available === 0 ? 'text-warning' : 'text-slate-500'}>
+                      {tenant.assigned.toLocaleString()} assigned
+                    </span>
+                    {' · '}
+                    <span className={tenant.available === 0 ? 'text-warning' : 'text-success'}>
+                      {tenant.available.toLocaleString()} available
+                    </span>
+                    {' of '}{tenant.total.toLocaleString()} total
+                  </p>
+                )}
+              </div>
+              {changed && (
+                <span className={`shrink-0 text-xs font-medium ${checked ? 'text-success' : 'text-danger'}`}>
+                  {checked ? '+ Assign' : '− Remove'}
+                </span>
+              )}
+              {noSeats && <span className="shrink-0 text-xs text-slate-500">No seats</span>}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
 }
 
 export function EntraDeviceCard({ device }) {

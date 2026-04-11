@@ -27,6 +27,7 @@ from backend.app_config import (
     save_config,
 )
 from backend.auth.msal import (
+    assign_user_licenses,
     get_entra_only_users,
     get_entra_user,
     get_entra_user_devices,
@@ -43,6 +44,7 @@ from backend.models.schemas import (
     EntraUserResponse,
     TenantLicense,
     TestEntraConnectionResponse,
+    UserLicense,
 )
 
 router = APIRouter(prefix="/entra", tags=["entra"])
@@ -234,6 +236,47 @@ async def get_user_devices(
         object_id,
     )
     return [EntraDevice(**d) for d in raw]
+
+
+@router.post("/users/{object_id}/assign-licenses")
+async def assign_licenses(
+    object_id: str,
+    add: list[str] = Query(default=[], description="SKU IDs to assign"),
+    remove: list[str] = Query(default=[], description="SKU IDs to remove"),
+    _token: dict = Depends(require_jwt),
+) -> dict:
+    """
+    Assign and/or remove licenses for an Entra user.
+
+    Pass SKU IDs (GUIDs) to add and/or remove as repeated query parameters:
+      ?add=<skuId>&add=<skuId>&remove=<skuId>
+
+    Requires User.ReadWrite.All or Directory.ReadWrite.All on the app registration.
+    Returns 503 if Entra is not configured.
+    Returns 400 with error message if the Graph API call fails (e.g. no available seats).
+    JWT required.
+    """
+    cfg = get_entra_settings()
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="Entra ID is not configured.")
+
+    if not add and not remove:
+        raise HTTPException(status_code=400, detail="No license changes requested.")
+
+    result = await run_in_threadpool(
+        assign_user_licenses,
+        cfg["tenant_id"],
+        cfg["client_id"],
+        cfg["client_secret"],
+        object_id,
+        add,
+        remove,
+    )
+
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error", "License assignment failed."))
+
+    return {"success": True}
 
 
 @router.get("/users/{object_id}/photo")

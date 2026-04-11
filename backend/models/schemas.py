@@ -207,6 +207,17 @@ class AuthMethod(BaseModel):
     detail: Optional[str] = None # device name, phone number, email address, etc.
 
 
+class UserLicense(BaseModel):
+    """
+    A license assigned to (or available for) an Entra user.
+    Carries enough identity to drive assign/unassign Graph API calls.
+    """
+
+    sku_id: str           # GUID — required by the Graph assignLicense API
+    sku_part_number: str  # e.g. "ENTERPRISEPACK"
+    display_name: str     # friendly name via _SKU_NAMES mapping
+
+
 class EntraGroupRef(BaseModel):
     """A single Entra group membership entry."""
 
@@ -228,7 +239,7 @@ class EntraUserResponse(BaseModel):
     sign_in_risk_level: Optional[str] = None    # "none"|"low"|"medium"|"high" — requires P2
     default_mfa_method: Optional[str] = None    # user's preferred sign-in method label
     mfa_methods: list[AuthMethod] = Field(default_factory=list)
-    licenses: list[str] = Field(default_factory=list)
+    licenses: list[UserLicense] = Field(default_factory=list)
     groups: list[EntraGroupRef] = Field(default_factory=list)
 
 
@@ -287,7 +298,7 @@ class EntraOnlyUser(BaseModel):
     last_sign_in: Optional[str] = None
     default_mfa_method: Optional[str] = None
     mfa_methods: list[AuthMethod] = Field(default_factory=list)
-    licenses: list[str] = Field(default_factory=list)
+    licenses: list[UserLicense] = Field(default_factory=list)
     groups: list[EntraGroupRef] = Field(default_factory=list)
     photo: Optional[str] = None  # base64 data URL from Graph /photo/$value
 
@@ -423,7 +434,7 @@ class ADUser(BaseModel):
     entra_account_enabled: Optional[bool] = None
     entra_default_mfa_method: Optional[str] = None
     entra_mfa_methods: list[AuthMethod] = Field(default_factory=list)
-    entra_licenses: list[str] = Field(default_factory=list)
+    entra_licenses: list[UserLicense] = Field(default_factory=list)
     entra_cloud_groups: list[EntraGroupRef] = Field(default_factory=list)
     entra_photo: Optional[str] = None  # base64 data URL from Graph /photo/$value
 
