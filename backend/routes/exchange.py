@@ -91,6 +91,7 @@ async def get_user_mailbox(
                 ps_cfg["app_id"],
                 ps_cfg.get("cert_path", ""),
                 ps_cfg["tenant_domain"],
+                ps_cfg.get("cert_password"),
             )
 
     # ── Step 3: Get Graph mailbox data (SOA Layer 1 + cloud mailbox details) ──
@@ -154,6 +155,7 @@ async def get_user_mailbox(
                 ps_cfg.get("cert_path", ""),
                 ps_cfg["tenant_domain"],
                 upn,
+                ps_cfg.get("cert_password"),
             )
             shared_access = [
                 SharedMailboxAccess(

@@ -511,6 +511,9 @@ async def update_exchange_ps_config(
             thumbprint = existing.get("cert_thumbprint")
             cert_expires = existing.get("cert_expires")
             # cert_path stays the same
+            # Keep existing password if no new cert was uploaded
+            if cert_password is None:
+                cert_password = existing.get("cert_password")
 
     save_exchange_ps_config({
         "app_id": app_id,
@@ -518,6 +521,7 @@ async def update_exchange_ps_config(
         "cert_path": str(cert_path),
         "cert_thumbprint": thumbprint,
         "cert_expires": cert_expires,
+        "cert_password": cert_password or None,  # None stored as null, not empty string
     })
 
     return {
@@ -554,6 +558,7 @@ async def test_exchange_ps_endpoint(
         cfg["app_id"],
         cfg.get("cert_path", ""),
         cfg["tenant_domain"],
+        cfg.get("cert_password"),
     )
     return TestExchangePSResponse(**result)
 

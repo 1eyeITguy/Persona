@@ -62,26 +62,34 @@ def _run_ps(script: str, timeout: int = 60) -> Optional[str]:
             timeout=timeout,
         )
         if proc.returncode != 0 and proc.stderr:
-            logger.warning("EXO PS script error: %s", proc.stderr[:500])
-        return proc.stdout.strip() or None
+            logger.warning("EXO PS script error: %s", proc.stderr[:1000])
+        return proc.stdout.strip() or None, proc.stderr.strip()
     except subprocess.TimeoutExpired:
         logger.warning("EXO PS script timed out after %ds", timeout)
-        return None
+        return None, f"Script timed out after {timeout}s"
     except Exception as exc:
         logger.warning("EXO PS script failed: %s", exc)
-        return None
+        return None, str(exc)
 
 
-def _connect_snippet(app_id: str, cert_path: str, tenant_domain: str) -> str:
+def _connect_snippet(app_id: str, cert_path: str, tenant_domain: str, cert_password: Optional[str] = None) -> str:
     """Return the PowerShell Connect-ExchangeOnline snippet."""
-    return (
-        f"Connect-ExchangeOnline "
-        f"-AppId '{app_id}' "
-        f"-CertificatePath '{cert_path}' "
-        f"-Organization '{tenant_domain}' "
-        f"-ShowBanner:$false "
-        f"-ErrorAction Stop"
-    )
+    lines = [
+        f"Connect-ExchangeOnline",
+        f"  -AppId '{app_id}'",
+        f"  -CertificatePath '{cert_path}'",
+        f"  -Organization '{tenant_domain}'",
+        f"  -ShowBanner:$false",
+        f"  -ErrorAction Stop",
+    ]
+    if cert_password:
+        # Escape any single quotes in the password
+        safe_pw = cert_password.replace("'", "''")
+        lines.insert(
+            3,
+            f"  -CertificatePassword (ConvertTo-SecureString '{safe_pw}' -AsPlainText -Force)",
+        )
+    return " `\n".join(lines)
 
 
 def _disconnect_snippet() -> str:
@@ -97,6 +105,7 @@ def get_org_block_flag(
     app_id: str,
     cert_path: str,
     tenant_domain: str,
+    cert_password: Optional[str] = None,
 ) -> Optional[bool]:
     """
     Return the value of BlockExchangeProvisioningFromOnPremEnabled for the tenant.
@@ -111,7 +120,7 @@ def get_org_block_flag(
 
     script = f"""
 Import-Module ExchangeOnlineManagement -ErrorAction Stop
-{_connect_snippet(app_id, cert_path, tenant_domain)}
+{_connect_snippet(app_id, cert_path, tenant_domain, cert_password)}
 try {{
     $cfg = Get-OrganizationConfig | Select-Object -ExpandProperty BlockExchangeProvisioningFromOnPremEnabled
     $cfg | ConvertTo-Json
@@ -119,7 +128,7 @@ try {{
     {_disconnect_snippet()}
 }}
 """
-    output = _run_ps(script)
+    output, _ = _run_ps(script)
     if output is None:
         return None
 
@@ -138,6 +147,7 @@ def get_shared_mailbox_access(
     cert_path: str,
     tenant_domain: str,
     upn: str,
+    cert_password: Optional[str] = None,
 ) -> list[dict]:
     """
     Return shared mailboxes that the given user has explicit access to.
@@ -152,7 +162,7 @@ def get_shared_mailbox_access(
 
     script = f"""
 Import-Module ExchangeOnlineManagement -ErrorAction Stop
-{_connect_snippet(app_id, cert_path, tenant_domain)}
+{_connect_snippet(app_id, cert_path, tenant_domain, cert_password)}
 try {{
     $results = @()
 
@@ -190,7 +200,7 @@ try {{
     {_disconnect_snippet()}
 }}
 """
-    output = _run_ps(script, timeout=120)
+    output, _ = _run_ps(script, timeout=120)
     if not output:
         return []
 
@@ -222,6 +232,7 @@ def test_ewo_connection(
     app_id: str,
     cert_path: str,
     tenant_domain: str,
+    cert_password: Optional[str] = None,
 ) -> dict:
     """
     Test the EXO PowerShell connection. Returns {"success": bool, "message": str}.
@@ -231,7 +242,7 @@ def test_ewo_connection(
 
     script = f"""
 Import-Module ExchangeOnlineManagement -ErrorAction Stop
-{_connect_snippet(app_id, cert_path, tenant_domain)}
+{_connect_snippet(app_id, cert_path, tenant_domain, cert_password)}
 try {{
     $count = (Get-Mailbox -ResultSize 1 -ErrorAction Stop | Measure-Object).Count
     "connected"
@@ -239,11 +250,19 @@ try {{
     {_disconnect_snippet()}
 }}
 """
-    output = _run_ps(script, timeout=60)
+    output, stderr = _run_ps(script, timeout=60)
     if output and "connected" in output.lower():
         return {"success": True, "message": "Exchange Online PowerShell connection successful."}
 
+    # Surface the real PowerShell error so the admin can diagnose without exec'ing into the container
+    error_detail = ""
+    if stderr:
+        # Extract the most useful line — PowerShell errors are verbose; grab the first non-blank line
+        first_line = next((l.strip() for l in stderr.splitlines() if l.strip()), "")
+        if first_line:
+            error_detail = f" PowerShell error: {first_line}"
+
     return {
         "success": False,
-        "message": "Could not connect to Exchange Online. Check the certificate, app ID, and tenant domain.",
+        "message": f"Could not connect to Exchange Online.{error_detail}",
     }
