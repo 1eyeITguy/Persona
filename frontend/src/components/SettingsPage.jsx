@@ -348,28 +348,29 @@ function EntraSection({ authHeaders }) {
 }
 
 // ---------------------------------------------------------------------------
-// LicensesSection
+// LicensesSection — embedded in Entra tab, full-width
 // ---------------------------------------------------------------------------
 
 function LicensesSection({ authHeaders }) {
-  const [licenses, setLicenses] = useState(null)   // null = loading
-  const [loading, setLoading]   = useState(true)
-  const [saving, setSaving]     = useState(false)
-  const [saveResult, setSaveResult] = useState(null)  // null | 'ok' | string (error)
-  const [q, setQ]               = useState('')
-
-  // Local editable state: {[sku_id]: {assignable, custom_name}}
-  const [edits, setEdits] = useState({})
+  const [licenses, setLicenses]     = useState(null)
+  const [loading, setLoading]       = useState(true)
+  const [saving, setSaving]         = useState(false)
+  const [saveResult, setSaveResult] = useState(null)
+  const [q, setQ]                   = useState('')
+  const [edits, setEdits]           = useState({})
 
   useEffect(() => {
     axios
       .get('/api/v1/settings/license-config', { headers: authHeaders() })
       .then(res => {
         setLicenses(res.data)
-        // Initialise edits from loaded data
         const init = {}
         res.data.forEach(l => {
-          init[l.sku_id] = { assignable: l.assignable, custom_name: l.custom_name ?? '' }
+          init[l.sku_id] = {
+            assignable:           l.assignable,
+            visible_on_main_page: l.visible_on_main_page,
+            custom_name:          l.custom_name ?? '',
+          }
         })
         setEdits(init)
       })
@@ -386,9 +387,10 @@ function LicensesSection({ authHeaders }) {
     setSaving(true)
     setSaveResult(null)
     const payload = (licenses ?? []).map(l => ({
-      sku_id:      l.sku_id,
-      assignable:  edits[l.sku_id]?.assignable ?? false,
-      custom_name: edits[l.sku_id]?.custom_name?.trim() || null,
+      sku_id:               l.sku_id,
+      assignable:           edits[l.sku_id]?.assignable           ?? false,
+      visible_on_main_page: edits[l.sku_id]?.visible_on_main_page ?? false,
+      custom_name:          edits[l.sku_id]?.custom_name?.trim()  || null,
     }))
     try {
       await axios.put('/api/v1/settings/license-config', payload, { headers: authHeaders() })
@@ -401,37 +403,54 @@ function LicensesSection({ authHeaders }) {
   }
 
   const filtered = (licenses ?? []).filter(l =>
-    !q || l.display_name.toLowerCase().includes(q.toLowerCase()) ||
+    !q || l.graph_display_name.toLowerCase().includes(q.toLowerCase()) ||
           l.sku_part_number.toLowerCase().includes(q.toLowerCase())
   )
 
-  const assignableCount = (licenses ?? []).filter(l => edits[l.sku_id]?.assignable).length
+  const assignableCount    = (licenses ?? []).filter(l => edits[l.sku_id]?.assignable).length
+  const visibleCount       = (licenses ?? []).filter(l => edits[l.sku_id]?.visible_on_main_page).length
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm text-slate-500">
+        <Loader2 className="h-4 w-4 animate-spin" />Loading tenant licenses…
+      </div>
+    )
+  }
+
+  if (!loading && licenses?.length === 0) {
+    return (
+      <p className="py-4 text-sm text-slate-500">
+        No tenant licenses found. Ensure the app registration has
+        Directory.Read.All or Organization.Read.All permission and admin consent granted.
+      </p>
+    )
+  }
 
   return (
-    <div className="mt-8">
-      <div className="mb-4 flex items-start justify-between gap-4">
+    <div className="mt-6">
+      {/* Header */}
+      <div className="mb-3 flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-base font-semibold text-slate-200">License Configuration</h2>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Control which licenses appear in the user assignment popup and the main Licenses page.
-            Custom names override the default friendly name everywhere in Persona.
+          <h3 className="text-sm font-semibold text-slate-200">License Configuration</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Set a custom display name, control visibility on the main Licenses page,
+            and enable assignment from the user blade.
           </p>
         </div>
-        {licenses && licenses.length > 0 && (
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="flex shrink-0 items-center gap-1.5 rounded-md bg-brand-primary px-4 py-2 text-sm font-medium text-white hover:bg-brand-primary/80 disabled:opacity-60 transition-colors"
-          >
-            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Save
-          </button>
-        )}
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex shrink-0 items-center gap-1.5 rounded-md bg-brand-primary px-4 py-1.5 text-sm font-medium text-white hover:bg-brand-primary/80 disabled:opacity-60 transition-colors"
+        >
+          {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Save
+        </button>
       </div>
 
       {saveResult === 'ok' && (
         <div className="mb-3 rounded-md border border-success/30 bg-success/5 px-4 py-2 text-sm text-success">
-          Configuration saved. {assignableCount} license{assignableCount !== 1 ? 's' : ''} marked as assignable.
+          Saved — {assignableCount} assignable, {visibleCount} visible on main page.
         </div>
       )}
       {saveResult && saveResult !== 'ok' && (
@@ -440,122 +459,100 @@ function LicensesSection({ authHeaders }) {
         </div>
       )}
 
-      <div className="rounded-xl border border-border-subtle bg-surface overflow-hidden">
-        {/* Search bar */}
-        <div className="border-b border-border-subtle px-4 py-3">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-            <input
-              type="text"
-              placeholder="Filter licenses…"
-              value={q}
-              onChange={e => setQ(e.target.value)}
-              className="w-full rounded-md border border-border-subtle bg-app-bg py-1.5 pl-8 pr-3 text-sm text-slate-200 placeholder:text-slate-500 focus:border-brand-primary focus:outline-none"
-            />
-          </div>
-        </div>
-
-        {loading && (
-          <div className="flex items-center gap-2 px-4 py-6 text-sm text-slate-500">
-            <Loader2 className="h-4 w-4 animate-spin" />Loading tenant licenses…
-          </div>
-        )}
-
-        {!loading && licenses?.length === 0 && (
-          <div className="px-4 py-6 text-sm text-slate-500">
-            No tenant licenses found. Ensure Entra ID is connected and the app registration has
-            Directory.Read.All or Organization.Read.All permission.
-          </div>
-        )}
-
-        {!loading && filtered.length > 0 && (
-          <>
-            {/* Column headers */}
-            <div className="grid grid-cols-[auto_1fr_200px_80px_80px_80px] items-center gap-3 border-b border-border-subtle/60 bg-surface/80 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
-              <span className="w-5">
-                <input
-                  type="checkbox"
-                  title="Toggle all visible"
-                  checked={filtered.every(l => edits[l.sku_id]?.assignable)}
-                  ref={el => {
-                    if (el) {
-                      const some = filtered.some(l => edits[l.sku_id]?.assignable)
-                      const all  = filtered.every(l => edits[l.sku_id]?.assignable)
-                      el.indeterminate = some && !all
-                    }
-                  }}
-                  onChange={e => {
-                    const val = e.target.checked
-                    setEdits(prev => {
-                      const next = { ...prev }
-                      filtered.forEach(l => { next[l.sku_id] = { ...next[l.sku_id], assignable: val } })
-                      return next
-                    })
-                    setSaveResult(null)
-                  }}
-                  className="accent-brand-primary"
-                />
-              </span>
-              <span>License / Custom Name</span>
-              <span>SKU</span>
-              <span className="text-right">Total</span>
-              <span className="text-right">Assigned</span>
-              <span className="text-right">Available</span>
-            </div>
-
-            {/* Rows */}
-            {filtered.map(lic => {
-              const edit = edits[lic.sku_id] ?? { assignable: false, custom_name: '' }
-              return (
-                <div
-                  key={lic.sku_id}
-                  className={`grid grid-cols-[auto_1fr_200px_80px_80px_80px] items-center gap-3 border-b border-border-subtle/30 px-4 py-3 transition-colors last:border-0 ${
-                    edit.assignable ? 'bg-brand-primary/5' : ''
-                  }`}
-                >
-                  {/* Assignable checkbox */}
-                  <input
-                    type="checkbox"
-                    checked={edit.assignable}
-                    title="Assignable from user blade"
-                    onChange={e => setField(lic.sku_id, 'assignable', e.target.checked)}
-                    className="w-5 accent-brand-primary cursor-pointer"
-                  />
-
-                  {/* Name + custom name input */}
-                  <div className="min-w-0">
-                    <p className="text-xs text-slate-500">{lic.graph_display_name}</p>
-                    <input
-                      type="text"
-                      value={edit.custom_name ?? ''}
-                      onChange={e => setField(lic.sku_id, 'custom_name', e.target.value)}
-                      placeholder="Custom name (optional)…"
-                      className="mt-0.5 w-full rounded border border-border-subtle/50 bg-app-bg px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-brand-primary focus:outline-none"
-                    />
-                  </div>
-
-                  {/* SKU part number */}
-                  <p className="truncate font-mono text-xs text-slate-500">{lic.sku_part_number}</p>
-
-                  {/* Counts */}
-                  <p className="text-right text-sm tabular-nums text-slate-400">{lic.total.toLocaleString()}</p>
-                  <p className="text-right text-sm tabular-nums text-slate-400">{lic.assigned.toLocaleString()}</p>
-                  <p className={`text-right text-sm font-medium tabular-nums ${
-                    lic.available === 0 ? 'text-warning' : 'text-success'
-                  }`}>{lic.available.toLocaleString()}</p>
-                </div>
-              )
-            })}
-          </>
-        )}
+      {/* Search */}
+      <div className="relative mb-3">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+        <input
+          type="text"
+          placeholder="Filter licenses…"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          className="w-full rounded-md border border-border-subtle bg-app-bg py-1.5 pl-8 pr-3 text-sm text-slate-200 placeholder:text-slate-500 focus:border-brand-primary focus:outline-none"
+        />
       </div>
 
-      {!loading && licenses && licenses.length > 0 && (
-        <p className="mt-2 text-xs text-slate-600">
-          {assignableCount} of {licenses.length} license{licenses.length !== 1 ? 's' : ''} marked as assignable.
-          Changes take effect immediately after saving.
-        </p>
-      )}
+      {/* Table */}
+      <div className="rounded-lg border border-border-subtle overflow-hidden">
+        {/* Sticky header */}
+        <div className="grid grid-cols-[1fr_180px_80px_80px_64px_64px] items-center gap-x-3 border-b border-border-subtle bg-surface/90 px-4 py-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">License Name</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Custom Name</span>
+          <span className="text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Assigned</span>
+          <span className="text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Available</span>
+          <span className="text-center text-xs font-semibold uppercase tracking-wider text-slate-500" title="Visible on main Licenses page">Main Page</span>
+          <span className="text-center text-xs font-semibold uppercase tracking-wider text-slate-500" title="Assignable from user blade">User Blade</span>
+        </div>
+
+        <div className="max-h-[calc(100vh-380px)] overflow-y-auto">
+          {filtered.map(lic => {
+            const edit2  = edits[lic.sku_id] ?? { assignable: false, visible_on_main_page: false, custom_name: '' }
+            const active = edit2.assignable || edit2.visible_on_main_page
+            return (
+              <div
+                key={lic.sku_id}
+                className={`grid grid-cols-[1fr_180px_80px_80px_64px_64px] items-center gap-x-3 border-b border-border-subtle/30 px-4 py-2.5 last:border-0 transition-colors ${
+                  active ? 'bg-brand-primary/5' : 'hover:bg-white/[0.02]'
+                }`}
+              >
+                {/* Name */}
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-slate-200">
+                    {edit2.custom_name?.trim() || lic.graph_display_name}
+                  </p>
+                  <p className="truncate font-mono text-xs text-slate-600">{lic.sku_part_number}</p>
+                </div>
+
+                {/* Custom name input */}
+                <input
+                  type="text"
+                  value={edit2.custom_name ?? ''}
+                  onChange={e => setField(lic.sku_id, 'custom_name', e.target.value)}
+                  placeholder="Override name…"
+                  className="rounded border border-border-subtle/50 bg-app-bg px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600 focus:border-brand-primary focus:outline-none w-full"
+                />
+
+                {/* Counts */}
+                <p className="text-right text-sm tabular-nums text-slate-400">{lic.assigned.toLocaleString()}</p>
+                <p className={`text-right text-sm font-medium tabular-nums ${lic.available === 0 ? 'text-warning' : 'text-success'}`}>
+                  {lic.available.toLocaleString()}
+                </p>
+
+                {/* Visible on main page */}
+                <div className="flex justify-center">
+                  <input
+                    type="checkbox"
+                    checked={edit2.visible_on_main_page}
+                    title="Show on main Licenses page"
+                    onChange={e => setField(lic.sku_id, 'visible_on_main_page', e.target.checked)}
+                    className="accent-brand-primary cursor-pointer h-4 w-4"
+                  />
+                </div>
+
+                {/* Assignable from user blade */}
+                <div className="flex justify-center">
+                  <input
+                    type="checkbox"
+                    checked={edit2.assignable}
+                    title="Assignable from user blade"
+                    onChange={e => setField(lic.sku_id, 'assignable', e.target.checked)}
+                    className="accent-brand-primary cursor-pointer h-4 w-4"
+                  />
+                </div>
+              </div>
+            )
+          })}
+
+          {filtered.length === 0 && (
+            <p className="px-4 py-6 text-center text-sm text-slate-500">
+              No licenses match &ldquo;{q}&rdquo;
+            </p>
+          )}
+        </div>
+      </div>
+
+      <p className="mt-2 text-xs text-slate-600">
+        {licenses?.length ?? 0} licenses total · {assignableCount} assignable from user blade · {visibleCount} visible on main page
+      </p>
     </div>
   )
 }
@@ -692,14 +689,45 @@ export default function SettingsPage() {
     )
   }
 
+  const [activeTab, setActiveTab] = useState('ad')
+
   const inputCls =
     'w-full rounded-md border border-border-subtle bg-app-bg px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary'
   const labelCls = 'mb-1 block text-sm font-medium text-slate-300'
 
+  const TABS = [
+    { id: 'ad',    label: 'AD Connection' },
+    { id: 'entra', label: 'Entra' },
+  ]
+
   return (
-    <div className="max-w-xl p-8">
-      <h1 className="mb-1 text-lg font-semibold text-white">Settings</h1>
-      <p className="mb-6 text-sm text-slate-400">LDAP / Active Directory connection</p>
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Page header + tab bar */}
+      <div className="shrink-0 border-b border-border-subtle bg-surface px-8 pt-6">
+        <h1 className="mb-4 text-lg font-semibold text-white">Settings</h1>
+        <div className="flex gap-0">
+          {TABS.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`-mb-px border-b-2 px-5 py-2.5 text-sm font-medium transition-colors ${
+                activeTab === tab.id
+                  ? 'border-brand-primary text-brand-primary'
+                  : 'border-transparent text-slate-400 hover:border-slate-600 hover:text-slate-200'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab content */}
+      <div className="flex-1 overflow-y-auto">
+
+      {/* ── AD Connection tab ── */}
+      {activeTab === 'ad' && (
+      <div className="max-w-xl p-8">
 
       <div className="space-y-5 rounded-xl border border-border-subtle bg-surface p-6">
         {/* Host + Port */}
@@ -855,11 +883,18 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Entra ID                                                            */}
-      {/* ------------------------------------------------------------------ */}
-      <EntraSection authHeaders={authHeaders} />
-      <LicensesSection authHeaders={authHeaders} />
+      </div>
+      )} {/* end AD tab */}
+
+      {/* ── Entra tab ── */}
+      {activeTab === 'entra' && (
+        <div className="p-8">
+          <EntraSection authHeaders={authHeaders} />
+          <LicensesSection authHeaders={authHeaders} />
+        </div>
+      )}
+
+      </div> {/* end scroll container */}
     </div>
   )
 }

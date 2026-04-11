@@ -76,12 +76,13 @@ export default function LicensesPage() {
           const cfg = cfgMap[l.sku_id]
           return {
             ...l,
-            display_name: cfg?.display_name || l.display_name,
-            assignable:   cfg?.assignable ?? false,
+            display_name:        cfg?.display_name || l.display_name,
+            assignable:          cfg?.assignable ?? false,
+            visible_on_main_page: cfg?.visible_on_main_page ?? false,
           }
         })
         setLicenses(merged)
-        setAssignableIds(new Set(cfgRes.data.filter(c => c.assignable).map(c => c.sku_id)))
+        setAssignableIds(new Set(cfgRes.data.filter(c => c.visible_on_main_page).map(c => c.sku_id)))
       })
       .catch(err => {
         if (err.response?.status === 503) setError('not_configured')
@@ -103,7 +104,7 @@ export default function LicensesPage() {
     const q_lower = q.toLowerCase()
     let rows = showAll
       ? licenses
-      : licenses.filter(l => l.assignable)
+      : licenses.filter(l => l.visible_on_main_page)
     if (q_lower) rows = rows.filter(l =>
       l.display_name.toLowerCase().includes(q_lower) ||
       l.sku_part_number.toLowerCase().includes(q_lower)
@@ -278,11 +279,11 @@ export default function LicensesPage() {
                     <>No licenses match &ldquo;{q}&rdquo;</>
                   ) : !showAll && licenses?.length > 0 ? (
                     <>
-                      No assignable licenses configured.{' '}
+                      No licenses are marked visible on this page.{' '}
                       <Link to="/settings" className="text-brand-primary hover:underline">
-                        Go to Settings → License Configuration
+                        Go to Settings → Entra → License Configuration
                       </Link>
-                      {' '}to mark licenses as assignable, or{' '}
+                      {' '}to enable "Visible on main page", or{' '}
                       <button onClick={() => setShowAll(true)} className="text-brand-primary hover:underline">
                         show all {licenses.length} licenses
                       </button>.

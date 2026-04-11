@@ -254,7 +254,8 @@ class LicenseConfigEntry(BaseModel):
     graph_display_name: str         # friendly name from our SKU mapping
     custom_name: Optional[str] = None   # admin-set override (None = use graph_display_name)
     display_name: str               # effective: custom_name or graph_display_name
-    assignable: bool = False        # whether this SKU appears in the user blade assign popup
+    assignable: bool = False            # whether this SKU appears in the user blade assign popup
+    visible_on_main_page: bool = False  # whether this SKU appears on the main Licenses page
     total: int = 0
     assigned: int = 0
     available: int = 0
@@ -266,6 +267,7 @@ class LicenseConfigSave(BaseModel):
 
     sku_id: str
     assignable: bool
+    visible_on_main_page: bool = False
     custom_name: Optional[str] = None  # empty string treated as None (revert to graph name)
 
 

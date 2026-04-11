@@ -371,6 +371,7 @@ async def get_license_config_endpoint(
             custom_name=cn,
             display_name=cn or gn,
             assignable=cfg_entry.get("assignable", False),
+            visible_on_main_page=cfg_entry.get("visible_on_main_page", False),
             total=lic["total"],
             assigned=lic["assigned"],
             available=lic["available"],

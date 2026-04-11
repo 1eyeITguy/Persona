@@ -118,8 +118,9 @@ def save_license_config(entries: list[dict]) -> None:
         if not sku_id:
             continue
         lc[sku_id] = {
-            "assignable":   bool(e.get("assignable", False)),
-            "custom_name":  e.get("custom_name") or None,
+            "assignable":            bool(e.get("assignable", False)),
+            "visible_on_main_page":  bool(e.get("visible_on_main_page", False)),
+            "custom_name":           e.get("custom_name") or None,
         }
     config["license_config"] = lc
     save_config(config)
