@@ -631,3 +631,4 @@ class ExchangePSConfigResponse(BaseModel):
 class TestExchangePSResponse(BaseModel):
     success: bool
     message: str
+    ps_error: Optional[str] = None  # raw PowerShell stderr, only present on failure

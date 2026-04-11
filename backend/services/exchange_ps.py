@@ -290,21 +290,10 @@ try {{
     if output and "connected" in output.lower():
         return {"success": True, "message": "Exchange Online PowerShell connection successful."}
 
-    # Surface the real PowerShell error so the admin can diagnose without exec'ing into the container
-    error_detail = ""
-    if stderr:
-        clean = _ANSI_RE.sub("", stderr).strip()
-        # PowerShell error output contains location indicator lines starting with '|'
-        # (e.g. "| Line |", "|    5 |", "| ~~~ |") before the actual message.
-        # Skip those and show up to 3 lines of real error text.
-        useful = [
-            l.strip() for l in clean.splitlines()
-            if l.strip() and not l.strip().startswith("|")
-        ][:3]
-        if useful:
-            error_detail = " PowerShell error: " + " | ".join(useful)
-
+    # Return the full cleaned stderr so nothing is hidden
+    ps_error = _ANSI_RE.sub("", stderr).strip() if stderr else ""
     return {
         "success": False,
-        "message": f"Could not connect to Exchange Online.{error_detail}",
+        "message": "Could not connect to Exchange Online.",
+        "ps_error": ps_error[:2000],  # cap at 2000 chars
     }

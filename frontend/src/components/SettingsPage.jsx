@@ -857,9 +857,14 @@ Disconnect-ExchangeOnline -Confirm:$false`}</pre>
         </p>
       )}
       {testResult && (
-        <p className={`text-sm rounded-md px-3 py-2 ${testResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
-          {testResult.message}
-        </p>
+        <div className={`rounded-md px-3 py-2 text-sm ${testResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
+          <p>{testResult.message}</p>
+          {testResult.ps_error && (
+            <pre className="mt-2 whitespace-pre-wrap break-all font-mono text-xs opacity-80">
+              {testResult.ps_error}
+            </pre>
+          )}
+        </div>
       )}
 
       <div className="flex gap-3">
