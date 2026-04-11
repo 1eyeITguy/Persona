@@ -291,6 +291,7 @@ class GroupRef(BaseModel):
 
     name: str
     dn: str
+    group_type: str = "Security"  # "Security" | "Distribution"
 
 
 class UserRef(BaseModel):
@@ -298,6 +299,8 @@ class UserRef(BaseModel):
 
     name: str
     dn: str
+    title: Optional[str] = None   # jobTitle / title attribute
+    photo: Optional[str] = None   # base64 data URL from thumbnailPhoto
 
 
 class ADUser(BaseModel):
@@ -341,6 +344,8 @@ class ADUser(BaseModel):
     company: Optional[str] = None
     manager_dn: Optional[str] = None
     manager_display_name: Optional[str] = None
+    manager_title: Optional[str] = None
+    manager_photo: Optional[str] = None  # base64 data URL
     direct_reports: list[UserRef] = Field(default_factory=list)
 
     # ---- Membership ----

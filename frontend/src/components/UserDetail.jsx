@@ -300,13 +300,34 @@ function ContactTab({ user }) {
 // Tab: Organization
 // ---------------------------------------------------------------------------
 
+/** Small avatar used for manager / direct report cards. */
+function UserAvatar({ photo, name, size = 'sm' }) {
+  const [err, setErr] = useState(false)
+  const dim = size === 'lg' ? 'h-10 w-10 text-sm' : 'h-8 w-8 text-xs'
+  if (photo && !err) {
+    return (
+      <img
+        src={photo}
+        alt=""
+        onError={() => setErr(true)}
+        className={`${dim} shrink-0 rounded-full object-cover ring-1 ring-white/10`}
+      />
+    )
+  }
+  return (
+    <div className={`${dim} flex shrink-0 select-none items-center justify-center rounded-full bg-brand-primary/30 font-bold text-brand-primary`}>
+      {getInitials(name)}
+    </div>
+  )
+}
+
 function OrganizationTab({ user, onUserSelect }) {
   return (
     <div>
       <dl>
-        <Field label="Title"      value={user.title} />
-        <Field label="Department" value={user.department} />
-        <Field label="Company"    value={user.company} />
+        <Field label="Title"       value={user.title} />
+        <Field label="Department"  value={user.department} />
+        <Field label="Company"     value={user.company} />
         <Field label="Description" value={user.description} />
       </dl>
 
@@ -315,10 +336,15 @@ function OrganizationTab({ user, onUserSelect }) {
           <SectionHeading>Manager</SectionHeading>
           <button
             onClick={() => onUserSelect?.(user.manager_dn)}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-brand-primary transition-colors hover:bg-brand-primary/10"
+            className="flex w-full items-center gap-3 rounded-md border border-border-subtle/50 bg-app-bg/60 px-3 py-2.5 text-left transition-colors hover:border-brand-primary/40 hover:bg-brand-primary/5"
           >
-            <User className="h-4 w-4 shrink-0" />
-            {user.manager_display_name}
+            <UserAvatar photo={user.manager_photo} name={user.manager_display_name} size="lg" />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-brand-primary">{user.manager_display_name}</p>
+              {user.manager_title && (
+                <p className="truncate text-xs text-slate-500">{user.manager_title}</p>
+              )}
+            </div>
           </button>
         </>
       )}
@@ -326,15 +352,20 @@ function OrganizationTab({ user, onUserSelect }) {
       {user.direct_reports?.length > 0 && (
         <>
           <SectionHeading>Direct Reports ({user.direct_reports.length})</SectionHeading>
-          <ul className="space-y-0.5">
+          <ul className="space-y-1.5">
             {user.direct_reports.map(dr => (
               <li key={dr.dn}>
                 <button
                   onClick={() => onUserSelect?.(dr.dn)}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-brand-primary transition-colors hover:bg-brand-primary/10"
+                  className="flex w-full items-center gap-3 rounded-md border border-border-subtle/50 bg-app-bg/60 px-3 py-2.5 text-left transition-colors hover:border-brand-primary/40 hover:bg-brand-primary/5"
                 >
-                  <User className="h-4 w-4 shrink-0" />
-                  {dr.name}
+                  <UserAvatar photo={dr.photo} name={dr.name} />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-brand-primary">{dr.name}</p>
+                    {dr.title && (
+                      <p className="truncate text-xs text-slate-500">{dr.title}</p>
+                    )}
+                  </div>
                 </button>
               </li>
             ))}
@@ -377,6 +408,9 @@ function TeamsIcon() {
 /** Section order for cloud groups. */
 const CLOUD_SECTION_ORDER = ['Security', 'Distribution', 'M365', 'Dynamic']
 
+/** Section order for AD on-prem groups. */
+const AD_SECTION_ORDER = ['Security', 'Distribution']
+
 /** Sort a group list by name in the given direction. */
 function sortByName(list, dir) {
   return [...list].sort((a, b) => {
@@ -389,6 +423,15 @@ function sortByName(list, dir) {
 function groupBySections(groups, dir) {
   const result = {}
   for (const s of CLOUD_SECTION_ORDER) {
+    result[s] = sortByName(groups.filter(g => g.group_type === s), dir)
+  }
+  return result
+}
+
+/** Group an AD group list into Security / Distribution sections. */
+function groupAdBySections(groups, dir) {
+  const result = {}
+  for (const s of AD_SECTION_ORDER) {
     result[s] = sortByName(groups.filter(g => g.group_type === s), dir)
   }
   return result
@@ -441,6 +484,37 @@ function ColumnHeader({ label, count, sortDir, onSortName,
           Name {sortDir === 'asc' ? '↑' : '↓'}
         </button>
       </div>
+    </div>
+  )
+}
+
+/** Render a single section of AD on-prem groups with checkboxes. */
+function AdGroupSection({ title, groups, selected, onToggle }) {
+  if (!groups.length) return null
+  return (
+    <div className="mb-3 last:mb-0">
+      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">{title}</p>
+      <ul className="space-y-1.5">
+        {groups.map(g => (
+          <li key={g.dn}
+            onClick={() => onToggle(g.dn)}
+            className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2 transition-colors ${
+              selected.has(g.dn)
+                ? 'border-brand-primary/40 bg-brand-primary/10'
+                : 'border-border-subtle bg-app-bg/60 hover:border-slate-600'
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={selected.has(g.dn)}
+              onChange={() => onToggle(g.dn)}
+              onClick={e => e.stopPropagation()}
+              className="accent-brand-primary shrink-0"
+            />
+            <span className="truncate text-sm text-slate-200">{g.name}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -501,7 +575,8 @@ function MemberOfTab({ user }) {
   const [cloudSelected, setCloudSelected] = useState(new Set())
 
   // ── Sorted / sectioned lists ──────────────────────────────────────────────
-  const sortedAd       = sortByName(adGroups, adSortDir)
+  const adSections     = groupAdBySections(adGroups, adSortDir)
+  const allAdFlat      = AD_SECTION_ORDER.flatMap(s => adSections[s])
   const cloudSections  = groupBySections(cloudGroups, cloudSortDir)
 
   // ── Select all helpers ────────────────────────────────────────────────────
@@ -537,9 +612,9 @@ function MemberOfTab({ user }) {
 
   function exportAd() {
     const rows = (adSelected.size > 0
-      ? sortedAd.filter(g => adSelected.has(g.dn))
-      : sortedAd
-    ).map(g => ({ Name: g.name, DN: g.dn, Source: 'AD' }))
+      ? allAdFlat.filter(g => adSelected.has(g.dn))
+      : allAdFlat
+    ).map(g => ({ Name: g.name, Type: g.group_type, DN: g.dn, Source: 'AD' }))
     exportCsv(rows, `ad-groups-${Date.now()}.csv`)
   }
 
@@ -551,32 +626,9 @@ function MemberOfTab({ user }) {
     exportCsv(rows, `entra-groups-${Date.now()}.csv`)
   }
 
-  // ── AD group row (shared between single and two-column layouts) ──────────
-  function AdGroupRow({ g }) {
-    return (
-      <li
-        onClick={() => toggleAdGroup(g.dn)}
-        className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2 transition-colors ${
-          adSelected.has(g.dn)
-            ? 'border-brand-primary/40 bg-brand-primary/10'
-            : 'border-border-subtle bg-app-bg/60 hover:border-slate-600'
-        }`}
-      >
-        <input
-          type="checkbox"
-          checked={adSelected.has(g.dn)}
-          onChange={() => toggleAdGroup(g.dn)}
-          onClick={e => e.stopPropagation()}
-          className="accent-brand-primary shrink-0"
-        />
-        <span className="truncate text-sm text-slate-200">{g.name}</span>
-      </li>
-    )
-  }
-
   // ── Render: single column (AD-only users) ─────────────────────────────────
   if (!isSynced) {
-    if (!sortedAd.length) return <p className="text-sm text-slate-500">Not a member of any groups.</p>
+    if (!adGroups.length) return <p className="text-sm text-slate-500">Not a member of any groups.</p>
     return (
       <div>
         <ColumnHeader
@@ -589,9 +641,9 @@ function MemberOfTab({ user }) {
           onSelectAll={handleAdSelectAll}
           onExport={exportAd}
         />
-        <ul className="space-y-1.5">
-          {sortedAd.map(g => <AdGroupRow key={g.dn} g={g} />)}
-        </ul>
+        {AD_SECTION_ORDER.map(s => (
+          <AdGroupSection key={s} title={s} groups={adSections[s]} selected={adSelected} onToggle={toggleAdGroup} />
+        ))}
       </div>
     )
   }
@@ -607,9 +659,9 @@ function MemberOfTab({ user }) {
           </span>
           <button
             onClick={() => {
-              const adRows = sortedAd
+              const adRows = allAdFlat
                 .filter(g => adSelected.has(g.dn))
-                .map(g => ({ Name: g.name, Source: 'AD', Type: '', 'Has Team': '', DN: g.dn }))
+                .map(g => ({ Name: g.name, Source: 'AD', Type: g.group_type, 'Has Team': '', DN: g.dn }))
               const cloudRows = allCloudFlat
                 .filter(g => cloudSelected.has(g.name))
                 .map(g => ({ Name: g.name, Source: 'Entra', Type: g.group_type, 'Has Team': g.has_team ? 'Yes' : '', DN: '' }))
@@ -638,10 +690,10 @@ function MemberOfTab({ user }) {
             onSelectAll={handleAdSelectAll}
             onExport={exportAd}
           />
-          {sortedAd.length ? (
-            <ul className="space-y-1.5">
-              {sortedAd.map(g => <AdGroupRow key={g.dn} g={g} />)}
-            </ul>
+          {adGroups.length ? (
+            AD_SECTION_ORDER.map(s => (
+              <AdGroupSection key={s} title={s} groups={adSections[s]} selected={adSelected} onToggle={toggleAdGroup} />
+            ))
           ) : (
             <p className="text-sm text-slate-500">No on-prem groups.</p>
           )}

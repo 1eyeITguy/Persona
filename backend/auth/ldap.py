@@ -140,6 +140,19 @@ _UAC_FLAGS: list[tuple[int, str]] = [
 ]
 
 
+def _classify_ad_group_type(group_type_val: Optional[int]) -> str:
+    """
+    Determine whether an AD group is a Security or Distribution group.
+
+    The groupType attribute is a signed 32-bit integer.  Security groups
+    always have the high bit set (value is negative when interpreted as
+    a signed integer).  Distribution groups are positive.
+    """
+    if group_type_val is None or group_type_val < 0:
+        return "Security"
+    return "Distribution"
+
+
 def _decode_uac_flags(uac: Optional[int]) -> dict[str, bool]:
     """Return a human-readable map of UAC bit flags → bool."""
     if uac is None:
@@ -732,18 +745,28 @@ def query_user(dn: str) -> ADUser:
     except Exception:
         object_guid = None
 
-    # ---- Resolve manager DN → displayName ----
+    # ---- Resolve manager DN → displayName, title, photo ----
     manager_dn = _str(e, "manager")
     manager_display_name: Optional[str] = None
+    manager_title: Optional[str] = None
+    manager_photo: Optional[str] = None
     if manager_dn:
         conn.search(
             search_base=manager_dn,
             search_filter="(objectClass=*)",
             search_scope=BASE,
-            attributes=["displayName"],
+            attributes=["displayName", "title", "thumbnailPhoto"],
         )
         if conn.entries:
-            manager_display_name = _str(conn.entries[0], "displayName")
+            me = conn.entries[0]
+            manager_display_name = _str(me, "displayName")
+            manager_title = _str(me, "title")
+            try:
+                photo_raw = me["thumbnailPhoto"].value
+                if isinstance(photo_raw, (bytes, bytearray)) and photo_raw:
+                    manager_photo = _photo_data_url(bytes(photo_raw))
+            except Exception:
+                pass
 
     # ---- Resolve memberOf DNs → GroupRef list ----
     member_of_dns = _list(e, "memberOf")
@@ -753,13 +776,18 @@ def query_user(dn: str) -> ADUser:
             search_base=group_dn,
             search_filter="(objectClass=*)",
             search_scope=BASE,
-            attributes=["displayName", "name"],
+            attributes=["displayName", "name", "groupType"],
         )
         if conn.entries:
-            display = _str(conn.entries[0], "displayName") or _str(conn.entries[0], "name")
-            member_of.append(GroupRef(name=display or group_dn, dn=group_dn))
+            ge = conn.entries[0]
+            display = _str(ge, "displayName") or _str(ge, "name")
+            member_of.append(GroupRef(
+                name=display or group_dn,
+                dn=group_dn,
+                group_type=_classify_ad_group_type(_int(ge, "groupType")),
+            ))
 
-    # ---- Resolve directReports DNs → UserRef list ----
+    # ---- Resolve directReports DNs → UserRef list (with title + photo) ----
     direct_report_dns = _list(e, "directReports")
     direct_reports: list[UserRef] = []
     for dr_dn in direct_report_dns:
@@ -767,12 +795,25 @@ def query_user(dn: str) -> ADUser:
             search_base=dr_dn,
             search_filter="(objectClass=*)",
             search_scope=BASE,
-            attributes=["displayName", "name"],
+            attributes=["displayName", "name", "title", "thumbnailPhoto"],
         )
         if conn.entries:
-            display = _str(conn.entries[0], "displayName") or _str(conn.entries[0], "name")
+            dre = conn.entries[0]
+            display = _str(dre, "displayName") or _str(dre, "name")
             if display:
-                direct_reports.append(UserRef(name=display, dn=dr_dn))
+                dr_photo: Optional[str] = None
+                try:
+                    photo_raw = dre["thumbnailPhoto"].value
+                    if isinstance(photo_raw, (bytes, bytearray)) and photo_raw:
+                        dr_photo = _photo_data_url(bytes(photo_raw))
+                except Exception:
+                    pass
+                direct_reports.append(UserRef(
+                    name=display,
+                    dn=dr_dn,
+                    title=_str(dre, "title"),
+                    photo=dr_photo,
+                ))
 
     # ---- Profile photo ----
     photo: str | None = None
@@ -822,6 +863,8 @@ def query_user(dn: str) -> ADUser:
         company=_str(e, "company"),
         manager_dn=manager_dn,
         manager_display_name=manager_display_name,
+        manager_title=manager_title,
+        manager_photo=manager_photo,
         direct_reports=direct_reports,
         # Membership
         member_of=member_of,
