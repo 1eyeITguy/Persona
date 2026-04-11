@@ -317,7 +317,7 @@ def get_entra_user(
             f"{_GRAPH_BASE}/users/{resolved_id}/memberOf",
             headers=headers,
             params={
-                "$select": "id,displayName,groupTypes,mailEnabled,securityEnabled"
+                "$select": "id,displayName,groupTypes,mailEnabled,securityEnabled,onPremisesSyncEnabled"
             },
             timeout=10,
         )
@@ -331,6 +331,7 @@ def get_entra_user(
                     }
                     for g in raw_groups
                     if g.get("@odata.type") == "#microsoft.graph.group"
+                    and not g.get("onPremisesSyncEnabled")  # cloud-only groups only
                 ],
                 key=lambda g: g["name"].lower(),
             )

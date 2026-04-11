@@ -64,6 +64,8 @@ function GroupTypeBadge({ type }) {
 
 const TABS = [
   { id: 'identity',  label: 'Identity' },
+  { id: 'mfa',       label: 'MFA' },
+  { id: 'licenses',  label: 'Licenses' },
   { id: 'contact',   label: 'Contact' },
   { id: 'member-of', label: 'Member Of' },
   { id: 'devices',   label: 'Devices' },
@@ -202,22 +204,54 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
                 data.account_enabled ? 'Enabled' : 'Disabled'
               } />
             </dl>
-
-            <SectionHeading>MFA Methods</SectionHeading>
-            <BadgeList
-              items={data.mfa_methods}
-              colorClass="border-success/30 bg-success/10 text-success"
-            />
-
-            <div className="mt-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Licenses</p>
-              <BadgeList
-                items={data.licenses}
-                colorClass="border-brand-primary/30 bg-brand-primary/10 text-brand-primary"
-              />
-            </div>
           </div>
         )
+
+      case 'mfa': {
+        const methods = data.mfa_methods ?? []
+        return (
+          <div>
+            <SectionHeading>Registered MFA Methods</SectionHeading>
+            {methods.length ? (
+              <div className="flex flex-wrap gap-2">
+                {methods.map(m => (
+                  <span key={m} className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-3 py-1 text-sm text-success">
+                    <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M13 4L6 11 3 8" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    {m}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-md border border-warning/20 bg-warning/5 px-4 py-3">
+                <p className="text-sm text-warning">No MFA methods registered.</p>
+                <p className="mt-1 text-xs text-slate-500">This account may be at higher risk. Consider requiring MFA enrollment.</p>
+              </div>
+            )}
+          </div>
+        )
+      }
+
+      case 'licenses': {
+        const licenses = data.licenses ?? []
+        return (
+          <div>
+            <SectionHeading>Assigned Licenses</SectionHeading>
+            {licenses.length ? (
+              <div className="flex flex-wrap gap-2">
+                {licenses.map(l => (
+                  <span key={l} className="inline-flex items-center rounded-full border border-brand-primary/30 bg-brand-primary/10 px-3 py-1 text-sm text-brand-primary">
+                    {l}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No licenses assigned.</p>
+            )}
+          </div>
+        )
+      }
 
       case 'contact':
         return (

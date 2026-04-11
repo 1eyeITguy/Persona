@@ -109,6 +109,8 @@ function BadgeList({ items, colorClass }) {
 
 const TABS = [
   { id: 'identity',     label: 'Identity' },
+  { id: 'mfa',          label: 'MFA' },
+  { id: 'licenses',     label: 'Licenses' },
   { id: 'account',      label: 'Account' },
   { id: 'contact',      label: 'Contact' },
   { id: 'organization', label: 'Organization' },
@@ -138,18 +140,6 @@ function IdentityTab({ user }) {
             <Field label="Entra Object ID" value={user.entra_object_id} mono />
             <Field label="Last Sign-in"    value={formatDate(user.entra_last_sign_in)} />
           </dl>
-
-          <SectionHeading>MFA Methods</SectionHeading>
-          <BadgeList
-            items={user.entra_mfa_methods}
-            colorClass="border-success/30 bg-success/10 text-success"
-          />
-
-          <SectionHeading>Licenses</SectionHeading>
-          <BadgeList
-            items={user.entra_licenses}
-            colorClass="border-brand-primary/30 bg-brand-primary/10 text-brand-primary"
-          />
         </>
       )}
 
@@ -159,6 +149,78 @@ function IdentityTab({ user }) {
             This user has no Entra counterpart. Cloud identity data is not available.
           </p>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tab: MFA
+// ---------------------------------------------------------------------------
+
+function MFATab({ user }) {
+  const methods = user.entra_mfa_methods ?? []
+
+  if (!user.is_synced) {
+    return (
+      <div className="rounded-md border border-border-subtle/50 bg-app-bg/60 px-4 py-3">
+        <p className="text-sm text-slate-500">Cloud identity data is not available for AD-only users.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <SectionHeading>Registered MFA Methods</SectionHeading>
+      {methods.length ? (
+        <div className="flex flex-wrap gap-2">
+          {methods.map(m => (
+            <span key={m} className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-3 py-1 text-sm text-success">
+              <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M13 4L6 11 3 8" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              {m}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-md border border-warning/20 bg-warning/5 px-4 py-3">
+          <p className="text-sm text-warning">No MFA methods registered.</p>
+          <p className="mt-1 text-xs text-slate-500">This account may be at higher risk. Consider requiring MFA enrollment.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tab: Licenses
+// ---------------------------------------------------------------------------
+
+function LicensesTab({ user }) {
+  const licenses = user.entra_licenses ?? []
+
+  if (!user.is_synced) {
+    return (
+      <div className="rounded-md border border-border-subtle/50 bg-app-bg/60 px-4 py-3">
+        <p className="text-sm text-slate-500">Cloud identity data is not available for AD-only users.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <SectionHeading>Assigned Licenses</SectionHeading>
+      {licenses.length ? (
+        <div className="flex flex-wrap gap-2">
+          {licenses.map(l => (
+            <span key={l} className="inline-flex items-center rounded-full border border-brand-primary/30 bg-brand-primary/10 px-3 py-1 text-sm text-brand-primary">
+              {l}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-slate-500">No licenses assigned.</p>
       )}
     </div>
   )
@@ -1146,6 +1208,8 @@ export default function UserDetail({ userDn, mode = 'merged', onClose, onUserSel
     if (!user) return null
     switch (activeTab) {
       case 'identity':     return <IdentityTab user={user} />
+      case 'mfa':          return <MFATab user={user} />
+      case 'licenses':     return <LicensesTab user={user} />
       case 'account':      return <AccountTab user={user} />
       case 'contact':      return <ContactTab user={user} />
       case 'organization': return <OrganizationTab user={user} onUserSelect={onUserSelect} />
