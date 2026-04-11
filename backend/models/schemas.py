@@ -610,6 +610,16 @@ class ExchangeMailboxResponse(BaseModel):
     shared_mailbox_access: list[SharedMailboxAccess] = Field(default_factory=list)
 
 
+class ExchangeExtendedResponse(BaseModel):
+    """
+    EXO PowerShell data loaded lazily after the main Exchange tab renders.
+    Returned by GET /api/v1/exchange/user/{upn}/extended.
+    """
+    mailbox_size_bytes: Optional[int] = None
+    shared_mailbox_access: list[SharedMailboxAccess] = Field(default_factory=list)
+    ps_available: bool = False   # False when EXO PS not configured or unreachable
+
+
 class ExchangePSConfigUpdate(BaseModel):
     """Used by PUT /api/v1/settings/exchange-ps-config to save EXO PS credentials."""
 

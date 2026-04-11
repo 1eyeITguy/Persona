@@ -66,11 +66,9 @@ function formatBytes(bytes) {
 // State: CLOUD
 // ---------------------------------------------------------------------------
 
-function CloudMailboxView({ data }) {
-  const primaryAddr = data.proxy_addresses?.find(p => p.is_primary && p.protocol === 'SMTP')
-  const aliases = data.proxy_addresses?.filter(
-    p => !(p.is_primary && p.protocol === 'SMTP')
-  ) ?? []
+function CloudMailboxView({ data, extended, extLoading }) {
+  const sizeBytes = extended?.mailbox_size_bytes ?? null
+  const sharedAccess = extended?.shared_mailbox_access ?? []
 
   return (
     <div>
@@ -78,7 +76,14 @@ function CloudMailboxView({ data }) {
       <dl>
         <Field label="Primary email"  value={data.primary_email} />
         <Field label="Display name"   value={data.display_name} />
-        <Field label="Mailbox size"   value={data.mailbox_size_bytes ? formatBytes(data.mailbox_size_bytes) : null} />
+        <Field
+          label="Mailbox size"
+          value={
+            extLoading ? '…' :
+            sizeBytes  ? formatBytes(sizeBytes) :
+            null
+          }
+        />
         <Field
           label="Archive"
           value={
@@ -132,11 +137,11 @@ function CloudMailboxView({ data }) {
       )}
 
       {/* Shared mailbox access */}
-      {data.shared_mailbox_access?.length > 0 && (
+      {sharedAccess.length > 0 && (
         <>
           <SectionHeading>Shared Mailbox Access</SectionHeading>
           <ul className="space-y-1">
-            {data.shared_mailbox_access.map((s, i) => (
+            {sharedAccess.map((s, i) => (
               <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
                 <Share2 className="h-3.5 w-3.5 shrink-0 text-slate-500" />
                 <div className="flex-1">
@@ -158,8 +163,13 @@ function CloudMailboxView({ data }) {
         </>
       )}
 
-      {data.shared_mailbox_access?.length === 0 && data.distribution_groups?.length === 0 && (
+      {!extLoading && sharedAccess.length === 0 && !data.distribution_groups?.length && (
         <p className="mt-4 text-xs text-slate-600">No distribution group membership or shared mailbox access found.</p>
+      )}
+      {extLoading && (
+        <p className="mt-4 flex items-center gap-1.5 text-xs text-slate-500">
+          <Loader2 className="h-3 w-3 animate-spin" /> Loading mailbox size and shared access…
+        </p>
       )}
     </div>
   )
@@ -170,13 +180,16 @@ function CloudMailboxView({ data }) {
 // ---------------------------------------------------------------------------
 
 export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
-  const [mailbox, setMailbox] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState(null)
+  const [mailbox, setMailbox]     = useState(null)
+  const [loading, setLoading]     = useState(false)
+  const [error, setError]         = useState(null)
+  const [extended, setExtended]   = useState(null)   // EXO PS data: size + shared access
+  const [extLoading, setExtLoading] = useState(false)
 
   useEffect(() => {
     if (!upn) return
     setMailbox(null)
+    setExtended(null)
     setError(null)
     setLoading(true)
 
@@ -188,6 +201,16 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
       .then(res => {
         setMailbox(res.data)
         onSoaResolved?.(res.data.soa)
+
+        // Only fetch extended (EXO PS) data when SOA is cloud
+        if (res.data.soa === 'cloud') {
+          setExtLoading(true)
+          axios
+            .get(`/api/v1/exchange/user/${encodeURIComponent(upn)}/extended`, { headers })
+            .then(ext => setExtended(ext.data))
+            .catch(() => {/* extended data is optional — fail silently */})
+            .finally(() => setExtLoading(false))
+        }
       })
       .catch(() => setError(true))
       .finally(() => setLoading(false))
@@ -215,7 +238,7 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
 
   // ── CLOUD ──────────────────────────────────────────────────────────────────
   if (mailbox.soa === 'cloud') {
-    return <CloudMailboxView data={mailbox} />
+    return <CloudMailboxView data={mailbox} extended={extended} extLoading={extLoading} />
   }
 
   // ── STALE_AD_ATTRS ─────────────────────────────────────────────────────────

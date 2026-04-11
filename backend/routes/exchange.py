@@ -2,7 +2,9 @@
 Exchange Online routes — /api/v1/exchange/
 
 Routes:
-  GET  /user/{upn}/mailbox   Return Exchange mailbox data with SOA resolution (JWT required)
+  GET  /user/{upn}/mailbox    Return Exchange mailbox data with SOA resolution (JWT required)
+  GET  /user/{upn}/extended   EXO PowerShell data: mailbox size + shared mailbox access (JWT required)
+                               Fetched lazily by the frontend after the tab renders.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from backend.app_config import (
 )
 from backend.auth.ldap import get_exchange_attrs_by_upn
 from backend.deps import require_jwt
-from backend.models.schemas import ExchangeMailboxResponse, ProxyAddress, SharedMailboxAccess
+from backend.models.schemas import ExchangeExtendedResponse, ExchangeMailboxResponse, ProxyAddress, SharedMailboxAccess
 from backend.services.exchange_graph import get_exchange_mailbox_data
 from backend.services.exchange_ps import get_mailbox_size_ps, get_org_block_flag, get_shared_mailbox_access
 from backend.services.exchange_soa import ExchangeSOA, resolve_exchange_soa
@@ -144,48 +146,68 @@ async def get_user_mailbox(
                 primary_email = pa.address
                 break
 
-    # ── Step 6: EXO PowerShell — mailbox size + shared mailbox access ────────
-    mailbox_size_bytes: int | None = None
-    shared_access: list[SharedMailboxAccess] = []
-    if is_exchange_ps_configured():
-        ps_cfg = get_exchange_ps_config()
-        if ps_cfg:
-            mailbox_size_bytes = await run_in_threadpool(
-                get_mailbox_size_ps,
-                ps_cfg["app_id"],
-                ps_cfg.get("cert_path", ""),
-                ps_cfg["tenant_domain"],
-                upn,
-                ps_cfg.get("cert_password"),
-            )
-            raw_shared = await run_in_threadpool(
-                get_shared_mailbox_access,
-                ps_cfg["app_id"],
-                ps_cfg.get("cert_path", ""),
-                ps_cfg["tenant_domain"],
-                upn,
-                ps_cfg.get("cert_password"),
-            )
-            shared_access = [
-                SharedMailboxAccess(
-                    display_name=s["display_name"],
-                    email=s["email"],
-                    access_type=s["access_type"],
-                )
-                for s in raw_shared
-            ]
-
     dist_groups = graph_data.get("distribution_groups") or []
 
+    # NOTE: mailbox size + shared mailbox access are in /extended (lazy-loaded by the frontend)
     return ExchangeMailboxResponse(
         soa=ExchangeSOA.CLOUD.value,
         primary_email=primary_email,
         display_name=graph_data.get("display_name"),
         proxy_addresses=proxy_addresses,
-        mailbox_size_bytes=mailbox_size_bytes,
+        mailbox_size_bytes=None,
         archive_enabled=graph_data.get("archive_enabled"),
         ooo_enabled=graph_data.get("ooo_enabled"),
         ooo_message=graph_data.get("ooo_external_message"),
         distribution_groups=dist_groups,
+        shared_mailbox_access=[],
+    )
+
+
+@router.get("/user/{upn}/extended", response_model=ExchangeExtendedResponse)
+async def get_user_exchange_extended(
+    upn: str,
+    _token: dict = Depends(require_jwt),
+) -> ExchangeExtendedResponse:
+    """
+    EXO PowerShell data for a user — mailbox size and shared mailbox access.
+
+    This endpoint is intentionally separate from /mailbox so the Exchange tab
+    can render immediately from Graph data while this slower EXO PS call runs
+    in the background.
+    """
+    upn = unquote(upn)
+
+    if not is_exchange_ps_configured():
+        return ExchangeExtendedResponse(ps_available=False)
+
+    ps_cfg = get_exchange_ps_config()
+    if not ps_cfg:
+        return ExchangeExtendedResponse(ps_available=False)
+
+    app_id      = ps_cfg["app_id"]
+    cert_path   = ps_cfg.get("cert_path", "")
+    tenant      = ps_cfg["tenant_domain"]
+    cert_pw     = ps_cfg.get("cert_password")
+
+    mailbox_size_bytes = await run_in_threadpool(
+        get_mailbox_size_ps, app_id, cert_path, tenant, upn, cert_pw
+    )
+
+    raw_shared = await run_in_threadpool(
+        get_shared_mailbox_access, app_id, cert_path, tenant, upn, cert_pw
+    )
+
+    shared_access = [
+        SharedMailboxAccess(
+            display_name=s["display_name"],
+            email=s["email"],
+            access_type=s["access_type"],
+        )
+        for s in raw_shared
+    ]
+
+    return ExchangeExtendedResponse(
+        mailbox_size_bytes=mailbox_size_bytes,
         shared_mailbox_access=shared_access,
+        ps_available=True,
     )
