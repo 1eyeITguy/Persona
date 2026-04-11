@@ -3,7 +3,7 @@ import { X, Loader2, AlertCircle, Monitor } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 import { getInitials, formatDate } from '../utils.js'
-import { EntraDeviceCard } from './UserDetail.jsx'
+import { EntraDeviceCard, CloudGroupsList } from './UserDetail.jsx'
 
 // ---------------------------------------------------------------------------
 // Shared helpers (local to this component)
@@ -229,23 +229,7 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
         )
 
       case 'member-of':
-        const groups = data.groups ?? []
-        if (!groups.length) return <p className="text-sm text-slate-500">No cloud group memberships.</p>
-        return (
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Cloud Groups — {groups.length}
-            </p>
-            <ul className="space-y-2">
-              {[...groups].sort((a, b) => a.name.localeCompare(b.name)).map(g => (
-                <li key={g.name} className="flex items-center justify-between gap-2 rounded-md border border-border-subtle bg-app-bg/60 px-3 py-2">
-                  <span className="truncate text-sm font-medium text-slate-200">{g.name}</span>
-                  <GroupTypeBadge type={g.group_type} />
-                </li>
-              ))}
-            </ul>
-          </div>
-        )
+        return <CloudGroupsList groups={data.groups ?? []} />
 
       case 'devices':
         if (devicesLoading) {
