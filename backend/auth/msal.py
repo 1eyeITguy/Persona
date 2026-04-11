@@ -317,7 +317,8 @@ def get_entra_user(
             f"{_GRAPH_BASE}/users/{resolved_id}/memberOf",
             headers=headers,
             params={
-                "$select": "id,displayName,groupTypes,mailEnabled,securityEnabled,onPremisesSyncEnabled"
+                "$select": "id,displayName,groupTypes,mailEnabled,securityEnabled,"
+                           "onPremisesSyncEnabled,resourceProvisioningOptions"
             },
             timeout=10,
         )
@@ -328,6 +329,9 @@ def get_entra_user(
                     {
                         "name": g.get("displayName") or "Unknown",
                         "group_type": _classify_group_type(g),
+                        # resourceProvisioningOptions contains "Team" when a Teams team
+                        # is provisioned on this Microsoft 365 group.
+                        "has_team": "Team" in (g.get("resourceProvisioningOptions") or []),
                     }
                     for g in raw_groups
                     if g.get("@odata.type") == "#microsoft.graph.group"

@@ -364,8 +364,38 @@ export function exportCsv(rows, filename) {
   URL.revokeObjectURL(url)
 }
 
-/** Column header with sort toggle and optional select-all + export controls. */
-function ColumnHeader({ label, count, sortField, sortDir, onSortName, onSortType, showTypeSort,
+/** Microsoft Teams logo — shown on M365 groups that have a team provisioned. */
+function TeamsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" title="Microsoft Teams">
+      <rect width="14" height="14" rx="3" fill="#5059C9"/>
+      <path d="M10 3.5H4V5.2H6.3V10.5H7.7V5.2H10V3.5Z" fill="white"/>
+    </svg>
+  )
+}
+
+/** Section order for cloud groups. */
+const CLOUD_SECTION_ORDER = ['Security', 'Distribution', 'M365', 'Dynamic']
+
+/** Sort a group list by name in the given direction. */
+function sortByName(list, dir) {
+  return [...list].sort((a, b) => {
+    const cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    return dir === 'asc' ? cmp : -cmp
+  })
+}
+
+/** Group a cloud group list into sections, sorted by name within each section. */
+function groupBySections(groups, dir) {
+  const result = {}
+  for (const s of CLOUD_SECTION_ORDER) {
+    result[s] = sortByName(groups.filter(g => g.group_type === s), dir)
+  }
+  return result
+}
+
+/** Column header with name sort toggle and select-all + export controls. */
+function ColumnHeader({ label, count, sortDir, onSortName,
                         selectedCount, selectableCount, onSelectAll, onExport }) {
   const allSelected = selectableCount > 0 && selectedCount === selectableCount
   const someSelected = selectedCount > 0 && !allSelected
@@ -374,7 +404,6 @@ function ColumnHeader({ label, count, sortField, sortDir, onSortName, onSortType
     <div className="mb-2 space-y-1.5">
       {/* Title row */}
       <div className="flex items-center gap-2">
-        {/* Select-all checkbox */}
         <input
           type="checkbox"
           checked={allSelected}
@@ -390,7 +419,6 @@ function ColumnHeader({ label, count, sortField, sortDir, onSortName, onSortType
             <span className="ml-1 text-brand-primary">({selectedCount} selected)</span>
           )}
         </p>
-        {/* Export button */}
         <button
           onClick={onExport}
           title={selectedCount > 0 ? 'Export selected' : 'Export all'}
@@ -403,34 +431,58 @@ function ColumnHeader({ label, count, sortField, sortDir, onSortName, onSortType
         </button>
       </div>
 
-      {/* Sort controls */}
+      {/* Name sort toggle */}
       <div className="flex items-center gap-1">
         <span className="text-[10px] text-slate-600 uppercase tracking-wide">Sort:</span>
         <button
           onClick={onSortName}
-          className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-            sortField === 'name'
-              ? 'bg-brand-primary/20 text-brand-primary'
-              : 'text-slate-500 hover:text-slate-300'
-          }`}
+          className="rounded px-1.5 py-0.5 text-[10px] font-medium text-brand-primary bg-brand-primary/20 transition-colors hover:bg-brand-primary/30"
         >
-          Name
-          {sortField === 'name' && (sortDir === 'asc' ? ' ↑' : ' ↓')}
+          Name {sortDir === 'asc' ? '↑' : '↓'}
         </button>
-        {showTypeSort && (
-          <button
-            onClick={onSortType}
-            className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-              sortField === 'type'
-                ? 'bg-brand-primary/20 text-brand-primary'
-                : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            Type
-            {sortField === 'type' && (sortDir === 'asc' ? ' ↑' : ' ↓')}
-          </button>
-        )}
       </div>
+    </div>
+  )
+}
+
+/** Render a single section of cloud groups with checkboxes. */
+function CloudGroupSection({ title, groups, selected, onToggle, dynamic: isDynamic = false }) {
+  if (!groups.length) return null
+  return (
+    <div className="mb-3 last:mb-0">
+      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">{title}</p>
+      <ul className="space-y-1.5">
+        {groups.map(g => {
+          const checked = selected.has(g.name)
+          return (
+            <li key={g.name}
+              onClick={() => !isDynamic && onToggle(g.name)}
+              title={isDynamic ? 'Dynamic groups cannot be manually assigned' : undefined}
+              className={`flex items-center gap-2.5 rounded-md border px-3 py-2 transition-colors ${
+                isDynamic
+                  ? 'cursor-not-allowed border-border-subtle/30 bg-app-bg/30 opacity-40'
+                  : checked
+                  ? 'cursor-pointer border-brand-primary/40 bg-brand-primary/10'
+                  : 'cursor-pointer border-border-subtle bg-app-bg/60 hover:border-slate-600'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={isDynamic}
+                onChange={() => !isDynamic && onToggle(g.name)}
+                onClick={e => e.stopPropagation()}
+                className="accent-brand-primary shrink-0 disabled:cursor-not-allowed"
+              />
+              <span className={`flex-1 truncate text-sm ${isDynamic ? 'text-slate-500' : 'text-slate-200'}`}>
+                {g.name}
+              </span>
+              {g.has_team && <TeamsIcon />}
+              {title !== 'M365' && <GroupTypeBadge type={g.group_type} />}
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
@@ -441,52 +493,20 @@ function MemberOfTab({ user }) {
   const isSynced  = user.is_synced
 
   // ── Sort state ────────────────────────────────────────────────────────────
-  const [adSort,    setAdSort]    = useState({ field: 'name', dir: 'asc' })
-  const [cloudSort, setCloudSort] = useState({ field: 'name', dir: 'asc' })
+  const [adSortDir,    setAdSortDir]    = useState('asc')
+  const [cloudSortDir, setCloudSortDir] = useState('asc')
 
   // ── Selection state ───────────────────────────────────────────────────────
   const [adSelected,    setAdSelected]    = useState(new Set())
   const [cloudSelected, setCloudSelected] = useState(new Set())
 
-  // Dynamic groups are never selectable
-  const isSelectable = g => g.group_type !== 'Dynamic'
-
-  // ── Sorted lists ──────────────────────────────────────────────────────────
-  function applySortAd(list, sort) {
-    return [...list].sort((a, b) =>
-      sort.dir === 'asc'
-        ? a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-        : b.name.localeCompare(a.name, undefined, { sensitivity: 'base' })
-    )
-  }
-
-  function applySortCloud(list, sort) {
-    if (sort.field === 'type') {
-      return [...list].sort((a, b) => {
-        const cmp = (a.group_type ?? '').localeCompare(b.group_type ?? '')
-        return sort.dir === 'asc' ? cmp : -cmp
-      })
-    }
-    return [...list].sort((a, b) => {
-      const cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-      return sort.dir === 'asc' ? cmp : -cmp
-    })
-  }
-
-  const sortedAd    = applySortAd(adGroups, adSort)
-  const sortedCloud = applySortCloud(cloudGroups, cloudSort)
-
-  // ── Sort toggles ──────────────────────────────────────────────────────────
-  function toggleAdSort(field) {
-    setAdSort(prev => ({ field, dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' }))
-  }
-  function toggleCloudSort(field) {
-    setCloudSort(prev => ({ field, dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' }))
-  }
+  // ── Sorted / sectioned lists ──────────────────────────────────────────────
+  const sortedAd       = sortByName(adGroups, adSortDir)
+  const cloudSections  = groupBySections(cloudGroups, cloudSortDir)
 
   // ── Select all helpers ────────────────────────────────────────────────────
-  const adSelectable    = adGroups // all AD groups are selectable
-  const cloudSelectable = cloudGroups.filter(isSelectable)
+  const adSelectable    = adGroups
+  const cloudSelectable = cloudGroups.filter(g => g.group_type !== 'Dynamic')
 
   function handleAdSelectAll() {
     if (adSelected.size === adSelectable.length) {
@@ -505,22 +525,16 @@ function MemberOfTab({ user }) {
   }
 
   function toggleAdGroup(dn) {
-    setAdSelected(prev => {
-      const next = new Set(prev)
-      next.has(dn) ? next.delete(dn) : next.add(dn)
-      return next
-    })
+    setAdSelected(prev => { const n = new Set(prev); n.has(dn) ? n.delete(dn) : n.add(dn); return n })
   }
 
   function toggleCloudGroup(name) {
-    setCloudSelected(prev => {
-      const next = new Set(prev)
-      next.has(name) ? next.delete(name) : next.add(name)
-      return next
-    })
+    setCloudSelected(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n })
   }
 
   // ── Export ────────────────────────────────────────────────────────────────
+  const allCloudFlat = CLOUD_SECTION_ORDER.flatMap(s => cloudSections[s])
+
   function exportAd() {
     const rows = (adSelected.size > 0
       ? sortedAd.filter(g => adSelected.has(g.dn))
@@ -531,10 +545,33 @@ function MemberOfTab({ user }) {
 
   function exportCloud() {
     const rows = (cloudSelected.size > 0
-      ? sortedCloud.filter(g => cloudSelected.has(g.name))
-      : sortedCloud
-    ).map(g => ({ Name: g.name, Type: g.group_type, Source: 'Entra' }))
+      ? allCloudFlat.filter(g => cloudSelected.has(g.name))
+      : allCloudFlat
+    ).map(g => ({ Name: g.name, Type: g.group_type, 'Has Team': g.has_team ? 'Yes' : '', Source: 'Entra' }))
     exportCsv(rows, `entra-groups-${Date.now()}.csv`)
+  }
+
+  // ── AD group row (shared between single and two-column layouts) ──────────
+  function AdGroupRow({ g }) {
+    return (
+      <li
+        onClick={() => toggleAdGroup(g.dn)}
+        className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2 transition-colors ${
+          adSelected.has(g.dn)
+            ? 'border-brand-primary/40 bg-brand-primary/10'
+            : 'border-border-subtle bg-app-bg/60 hover:border-slate-600'
+        }`}
+      >
+        <input
+          type="checkbox"
+          checked={adSelected.has(g.dn)}
+          onChange={() => toggleAdGroup(g.dn)}
+          onClick={e => e.stopPropagation()}
+          className="accent-brand-primary shrink-0"
+        />
+        <span className="truncate text-sm text-slate-200">{g.name}</span>
+      </li>
+    )
   }
 
   // ── Render: single column (AD-only users) ─────────────────────────────────
@@ -545,35 +582,15 @@ function MemberOfTab({ user }) {
         <ColumnHeader
           label="On-Prem (AD)"
           count={adGroups.length}
-          sortField={adSort.field}
-          sortDir={adSort.dir}
-          onSortName={() => toggleAdSort('name')}
-          showTypeSort={false}
+          sortDir={adSortDir}
+          onSortName={() => setAdSortDir(d => d === 'asc' ? 'desc' : 'asc')}
           selectedCount={adSelected.size}
           selectableCount={adSelectable.length}
           onSelectAll={handleAdSelectAll}
           onExport={exportAd}
         />
         <ul className="space-y-1.5">
-          {sortedAd.map(g => (
-            <li key={g.dn}
-              onClick={() => toggleAdGroup(g.dn)}
-              className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2 transition-colors ${
-                adSelected.has(g.dn)
-                  ? 'border-brand-primary/40 bg-brand-primary/10'
-                  : 'border-border-subtle bg-app-bg/60 hover:border-slate-600'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={adSelected.has(g.dn)}
-                onChange={() => toggleAdGroup(g.dn)}
-                onClick={e => e.stopPropagation()}
-                className="accent-brand-primary shrink-0"
-              />
-              <span className="truncate text-sm text-slate-200">{g.name}</span>
-            </li>
-          ))}
+          {sortedAd.map(g => <AdGroupRow key={g.dn} g={g} />)}
         </ul>
       </div>
     )
@@ -582,7 +599,7 @@ function MemberOfTab({ user }) {
   // ── Render: two-column (synced users) ─────────────────────────────────────
   return (
     <div>
-      {/* Combined export when both columns have selections */}
+      {/* Combined export banner */}
       {(adSelected.size > 0 || cloudSelected.size > 0) && (
         <div className="mb-3 flex items-center justify-between rounded-md border border-brand-primary/30 bg-brand-primary/10 px-3 py-2">
           <span className="text-xs text-slate-300">
@@ -592,10 +609,10 @@ function MemberOfTab({ user }) {
             onClick={() => {
               const adRows = sortedAd
                 .filter(g => adSelected.has(g.dn))
-                .map(g => ({ Name: g.name, Source: 'AD', Type: '', DN: g.dn }))
-              const cloudRows = sortedCloud
+                .map(g => ({ Name: g.name, Source: 'AD', Type: '', 'Has Team': '', DN: g.dn }))
+              const cloudRows = allCloudFlat
                 .filter(g => cloudSelected.has(g.name))
-                .map(g => ({ Name: g.name, Source: 'Entra', Type: g.group_type, DN: '' }))
+                .map(g => ({ Name: g.name, Source: 'Entra', Type: g.group_type, 'Has Team': g.has_team ? 'Yes' : '', DN: '' }))
               exportCsv([...adRows, ...cloudRows], `groups-combined-${Date.now()}.csv`)
             }}
             className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-brand-primary transition-colors hover:bg-brand-primary/10"
@@ -614,10 +631,8 @@ function MemberOfTab({ user }) {
           <ColumnHeader
             label="On-Prem (AD)"
             count={adGroups.length}
-            sortField={adSort.field}
-            sortDir={adSort.dir}
-            onSortName={() => toggleAdSort('name')}
-            showTypeSort={false}
+            sortDir={adSortDir}
+            onSortName={() => setAdSortDir(d => d === 'asc' ? 'desc' : 'asc')}
             selectedCount={adSelected.size}
             selectableCount={adSelectable.length}
             onSelectAll={handleAdSelectAll}
@@ -625,79 +640,36 @@ function MemberOfTab({ user }) {
           />
           {sortedAd.length ? (
             <ul className="space-y-1.5">
-              {sortedAd.map(g => (
-                <li key={g.dn}
-                  onClick={() => toggleAdGroup(g.dn)}
-                  className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2 transition-colors ${
-                    adSelected.has(g.dn)
-                      ? 'border-brand-primary/40 bg-brand-primary/10'
-                      : 'border-border-subtle bg-app-bg/60 hover:border-slate-600'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={adSelected.has(g.dn)}
-                    onChange={() => toggleAdGroup(g.dn)}
-                    onClick={e => e.stopPropagation()}
-                    className="accent-brand-primary shrink-0"
-                  />
-                  <span className="truncate text-sm text-slate-200">{g.name}</span>
-                </li>
-              ))}
+              {sortedAd.map(g => <AdGroupRow key={g.dn} g={g} />)}
             </ul>
           ) : (
             <p className="text-sm text-slate-500">No on-prem groups.</p>
           )}
         </div>
 
-        {/* Entra column */}
+        {/* Entra column — sectioned */}
         <div>
           <ColumnHeader
             label="Cloud (Entra)"
             count={cloudGroups.length}
-            sortField={cloudSort.field}
-            sortDir={cloudSort.dir}
-            onSortName={() => toggleCloudSort('name')}
-            onSortType={() => toggleCloudSort('type')}
-            showTypeSort
+            sortDir={cloudSortDir}
+            onSortName={() => setCloudSortDir(d => d === 'asc' ? 'desc' : 'asc')}
             selectedCount={cloudSelected.size}
             selectableCount={cloudSelectable.length}
             onSelectAll={handleCloudSelectAll}
             onExport={exportCloud}
           />
-          {sortedCloud.length ? (
-            <ul className="space-y-1.5">
-              {sortedCloud.map(g => {
-                const dynamic = g.group_type === 'Dynamic'
-                const checked = cloudSelected.has(g.name)
-                return (
-                  <li key={g.name}
-                    onClick={() => !dynamic && toggleCloudGroup(g.name)}
-                    title={dynamic ? 'Dynamic groups cannot be manually assigned' : undefined}
-                    className={`flex items-center gap-2.5 rounded-md border px-3 py-2 transition-colors ${
-                      dynamic
-                        ? 'cursor-not-allowed border-border-subtle/30 bg-app-bg/30 opacity-40'
-                        : checked
-                        ? 'cursor-pointer border-brand-primary/40 bg-brand-primary/10'
-                        : 'cursor-pointer border-border-subtle bg-app-bg/60 hover:border-slate-600'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={dynamic}
-                      onChange={() => !dynamic && toggleCloudGroup(g.name)}
-                      onClick={e => e.stopPropagation()}
-                      className="accent-brand-primary shrink-0 disabled:cursor-not-allowed"
-                    />
-                    <span className={`flex-1 truncate text-sm ${dynamic ? 'text-slate-500' : 'text-slate-200'}`}>
-                      {g.name}
-                    </span>
-                    <GroupTypeBadge type={g.group_type} />
-                  </li>
-                )
-              })}
-            </ul>
+          {cloudGroups.length ? (
+            CLOUD_SECTION_ORDER.map(sectionType => (
+              <CloudGroupSection
+                key={sectionType}
+                title={sectionType}
+                groups={cloudSections[sectionType]}
+                selected={cloudSelected}
+                onToggle={toggleCloudGroup}
+                dynamic={sectionType === 'Dynamic'}
+              />
+            ))
           ) : (
             <p className="text-sm text-slate-500">No cloud groups.</p>
           )}
@@ -717,47 +689,30 @@ function MemberOfTab({ user }) {
  * Used standalone in EntraUserDetailPanel where there is no AD column.
  */
 export function CloudGroupsList({ groups = [] }) {
-  const [sort, setSort]         = useState({ field: 'name', dir: 'asc' })
+  const [sortDir, setSortDir] = useState('asc')
   const [selected, setSelected] = useState(new Set())
 
-  const isSelectable = g => g.group_type !== 'Dynamic'
-  const selectable   = groups.filter(isSelectable)
-
-  const sorted = [...groups].sort((a, b) => {
-    const av = sort.field === 'type' ? (a.group_type ?? '') : a.name
-    const bv = sort.field === 'type' ? (b.group_type ?? '') : b.name
-    const cmp = av.localeCompare(bv, undefined, { sensitivity: 'base' })
-    return sort.dir === 'asc' ? cmp : -cmp
-  })
-
-  function toggleSort(field) {
-    setSort(prev => ({ field, dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' }))
-  }
+  const selectable  = groups.filter(g => g.group_type !== 'Dynamic')
+  const sections    = groupBySections(groups, sortDir)
+  const allFlat     = CLOUD_SECTION_ORDER.flatMap(s => sections[s])
 
   const allSelected  = selectable.length > 0 && selected.size === selectable.length
   const someSelected = selected.size > 0 && !allSelected
 
   function handleSelectAll() {
-    if (allSelected) {
-      setSelected(new Set())
-    } else {
-      setSelected(new Set(selectable.map(g => g.name)))
-    }
+    if (allSelected) setSelected(new Set())
+    else setSelected(new Set(selectable.map(g => g.name)))
   }
 
   function toggleGroup(name) {
-    setSelected(prev => {
-      const next = new Set(prev)
-      next.has(name) ? next.delete(name) : next.add(name)
-      return next
-    })
+    setSelected(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n })
   }
 
   function handleExport() {
     const rows = (selected.size > 0
-      ? sorted.filter(g => selected.has(g.name))
-      : sorted
-    ).map(g => ({ Name: g.name, Type: g.group_type, Source: 'Entra' }))
+      ? allFlat.filter(g => selected.has(g.name))
+      : allFlat
+    ).map(g => ({ Name: g.name, Type: g.group_type, 'Has Team': g.has_team ? 'Yes' : '', Source: 'Entra' }))
     exportCsv(rows, `entra-groups-${Date.now()}.csv`)
   }
 
@@ -765,8 +720,8 @@ export function CloudGroupsList({ groups = [] }) {
 
   return (
     <div>
-      {/* Header: select-all + sort + export */}
-      <div className="mb-2 space-y-1.5">
+      {/* Header */}
+      <div className="mb-3 space-y-1.5">
         <div className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -779,9 +734,7 @@ export function CloudGroupsList({ groups = [] }) {
           />
           <p className="flex-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
             Cloud Groups — {groups.length}
-            {selected.size > 0 && (
-              <span className="ml-1 text-brand-primary">({selected.size} selected)</span>
-            )}
+            {selected.size > 0 && <span className="ml-1 text-brand-primary">({selected.size} selected)</span>}
           </p>
           <button
             onClick={handleExport}
@@ -796,55 +749,26 @@ export function CloudGroupsList({ groups = [] }) {
         </div>
         <div className="flex items-center gap-1">
           <span className="text-[10px] text-slate-600 uppercase tracking-wide">Sort:</span>
-          {[['name', 'Name'], ['type', 'Type']].map(([f, label]) => (
-            <button
-              key={f}
-              onClick={() => toggleSort(f)}
-              className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                sort.field === f
-                  ? 'bg-brand-primary/20 text-brand-primary'
-                  : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              {label}{sort.field === f ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
-            </button>
-          ))}
+          <button
+            onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+            className="rounded px-1.5 py-0.5 text-[10px] font-medium text-brand-primary bg-brand-primary/20 transition-colors hover:bg-brand-primary/30"
+          >
+            Name {sortDir === 'asc' ? '↑' : '↓'}
+          </button>
         </div>
       </div>
 
-      {/* Group rows */}
-      <ul className="space-y-1.5">
-        {sorted.map(g => {
-          const dynamic = g.group_type === 'Dynamic'
-          const checked = selected.has(g.name)
-          return (
-            <li key={g.name}
-              onClick={() => !dynamic && toggleGroup(g.name)}
-              title={dynamic ? 'Dynamic groups cannot be manually assigned' : undefined}
-              className={`flex items-center gap-2.5 rounded-md border px-3 py-2 transition-colors ${
-                dynamic
-                  ? 'cursor-not-allowed border-border-subtle/30 bg-app-bg/30 opacity-40'
-                  : checked
-                  ? 'cursor-pointer border-brand-primary/40 bg-brand-primary/10'
-                  : 'cursor-pointer border-border-subtle bg-app-bg/60 hover:border-slate-600'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={checked}
-                disabled={dynamic}
-                onChange={() => !dynamic && toggleGroup(g.name)}
-                onClick={e => e.stopPropagation()}
-                className="accent-brand-primary shrink-0 disabled:cursor-not-allowed"
-              />
-              <span className={`flex-1 truncate text-sm ${dynamic ? 'text-slate-500' : 'text-slate-200'}`}>
-                {g.name}
-              </span>
-              <GroupTypeBadge type={g.group_type} />
-            </li>
-          )
-        })}
-      </ul>
+      {/* Sections */}
+      {CLOUD_SECTION_ORDER.map(sectionType => (
+        <CloudGroupSection
+          key={sectionType}
+          title={sectionType}
+          groups={sections[sectionType]}
+          selected={selected}
+          onToggle={toggleGroup}
+          dynamic={sectionType === 'Dynamic'}
+        />
+      ))}
     </div>
   )
 }

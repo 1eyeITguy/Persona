@@ -201,7 +201,8 @@ class EntraGroupRef(BaseModel):
     """A single Entra group membership entry."""
 
     name: str
-    group_type: str  # "Security" | "M365" | "Dynamic" | "Distribution"
+    group_type: str   # "Security" | "M365" | "Dynamic" | "Distribution"
+    has_team: bool = False  # True when a Teams team is provisioned on an M365 group
 
 
 class EntraUserResponse(BaseModel):
