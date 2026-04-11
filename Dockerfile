@@ -36,16 +36,34 @@ RUN mkdir -p /app/data /app/data/certs
 # Adds ~200 MB to the image. The EXO features degrade gracefully if pwsh
 # is unavailable, so this block can be commented out in space-constrained
 # environments — all Graph API-based Exchange features will still work.
+#
+# Installs PowerShell from GitHub releases (reliable across Debian 11/12).
 # ---------------------------------------------------------------------------
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget gnupg ca-certificates && \
-    wget -q "https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb" && \
-    dpkg -i packages-microsoft-prod.deb && \
-    rm packages-microsoft-prod.deb && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends powershell && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    . /etc/os-release; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        wget \
+        libgssapi-krb5-2 \
+        libstdc++6 \
+        zlib1g; \
+    case "$VERSION_ID" in \
+        "11") apt-get install -y --no-install-recommends libicu67 ;; \
+        "12") apt-get install -y --no-install-recommends libicu72 ;; \
+        *)    apt-get install -y --no-install-recommends "libicu-dev" ;; \
+    esac; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*; \
+    PWSH_VERSION=7.4.6; \
+    wget -q \
+        "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" \
+        -O /tmp/pwsh.tar.gz; \
+    mkdir -p /opt/microsoft/powershell/7; \
+    tar -xzf /tmp/pwsh.tar.gz -C /opt/microsoft/powershell/7; \
+    chmod +x /opt/microsoft/powershell/7/pwsh; \
+    ln -s /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh; \
+    rm /tmp/pwsh.tar.gz
 
 RUN pwsh -NonInteractive -Command \
     "Install-Module -Name ExchangeOnlineManagement -Force -Scope AllUsers -AcceptLicense"
