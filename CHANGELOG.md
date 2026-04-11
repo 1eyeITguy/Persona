@@ -7,22 +7,25 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [0.3.1-alpha] — dev branch (Phase 2 in progress)
 
-### Fixed
-- **Entra auto-setup "Sign-in failed, not authenticated"** — OAuth2 exchange endpoint no longer
-  requires JWT; PKCE + state provide sufficient security, and JWT is unavailable after a full-page
-  redirect to Microsoft login.
-- **"Go back" after Entra sign-in failure** — error page now navigates to the originating page
-  (Settings or Setup Wizard) instead of always going to `/`.
+### Removed
+- **Automatic Entra App Registration setup** — the OAuth2/PKCE flow that created an App Registration
+  on behalf of the admin has been removed entirely. Attempts to make it work reliably required too
+  many Azure Portal pre-conditions (Allow public client flows, bootstrap app registration, etc.),
+  creating more friction than the manual path.
+- `ENTRA_BOOTSTRAP_CLIENT_ID` env var — no longer needed or read
+- `/api/v1/entra/oauth2/start`, `/oauth2/exchange`, `/oauth2/create-app` backend routes removed
+- `EntraCallbackPage` component and `/entra-callback` route removed from frontend
+
+### Added
+- **In-app step-by-step Entra setup guide** — both the Setup Wizard (Step 4) and the Settings page
+  Entra section now include a collapsible "How to create an App Registration in Azure" card showing
+  all six required steps (registration, copy IDs, API permissions, admin consent, secret, enter in Persona).
+  The guide is expanded by default in the Setup Wizard (first-time setup) and collapsed by default
+  in Settings (editing existing config).
 
 ### Changed
-- **Entra auto setup overhauled** — eliminated manual permission configuration and Tenant ID input:
-  - Permissions (`Application.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`) are now requested
-    dynamically via OAuth scopes — no need to add them in Azure Portal
-  - Tenant ID is auto-detected from the sign-in response (uses `/organizations` endpoint)
-  - Fallback guide reduced to 3 Azure Portal steps (name + redirect URI + copy Client ID)
-  - OAuth prompt changed to `consent` so admin consent is granted during sign-in
-- **`ENTRA_BOOTSTRAP_CLIENT_ID` env var** — when set, Entra setup becomes true one-click:
-  click "Sign in with Microsoft", authenticate as Global Admin, done. No Azure Portal steps.
+- **Entra setup UX simplified** — the "choose" mode selector (auto vs. manual) is gone; clicking
+  "Connect" goes directly to the credential form with the guide card inline
 
 ---
 

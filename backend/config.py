@@ -16,11 +16,6 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173"]
     data_dir: str = "/app/data"
 
-    # Optional: pre-registered multi-tenant bootstrap app for one-click Entra setup.
-    # When set, the "Connect to Entra" flow becomes a single "Sign in with Microsoft"
-    # button — no manual Azure Portal steps required.
-    entra_bootstrap_client_id: str = ""
-
     # pydantic-settings v2: list fields are parsed as JSON from .env
     # Use CORS_ORIGINS=["http://localhost:5173"] format in .env
     model_config = SettingsConfigDict(

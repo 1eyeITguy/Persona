@@ -94,7 +94,6 @@ class SettingsStatusResponse(BaseModel):
     site_name: str = "Persona"
     entra_configured: bool = False
     entra_secret_expires: Optional[str] = None
-    entra_bootstrap_client_id: str = ""
 
 
 class TestConnectionRequest(BaseModel):
@@ -193,51 +192,6 @@ class EntraConfigResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Entra OAuth2 / programmatic App Registration models
-# ---------------------------------------------------------------------------
-
-
-class OAuthStartRequest(BaseModel):
-    """Sent by the frontend to begin the OAuth2 Authorization Code + PKCE flow."""
-
-    tenant_id: str = ""  # optional — /organizations used when empty
-    client_id: str       # bootstrap public client app ID
-    redirect_uri: str    # e.g. "http://localhost:5173/entra-callback"
-
-
-class OAuthStartResponse(BaseModel):
-    """The Microsoft authorization URL to redirect the browser to."""
-
-    auth_url: str
-
-
-class OAuthExchangeRequest(BaseModel):
-    """Sent by the callback page after Microsoft redirects back with a code."""
-
-    code: str   # authorization code from the redirect query parameter
-    state: str  # CSRF/PKCE state value from the redirect query parameter
-
-
-class OAuthExchangeResponse(BaseModel):
-    success: bool
-    session_token: Optional[str] = None  # opaque ID; used by create-app endpoint
-    message: Optional[str] = None
-
-
-class CreateAppRequest(BaseModel):
-    """Sent by the frontend to trigger App Registration creation."""
-
-    session_token: str  # from OAuthExchangeResponse.session_token
-
-
-class CreateAppResponse(BaseModel):
-    success: bool
-    client_id: Optional[str] = None
-    secret_expires: Optional[str] = None  # ISO date YYYY-MM-DD
-    message: str
-    # NOTE: client_secret is NEVER in this response — it is saved server-side only
-
-
 # ---------------------------------------------------------------------------
 # Entra cloud user models (for Cloud tab in UserDetail)
 # ---------------------------------------------------------------------------

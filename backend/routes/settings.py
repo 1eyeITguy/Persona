@@ -27,7 +27,6 @@ from backend.app_config import (
     save_config,
 )
 from backend.auth.ldap import test_ldap_connection
-from backend.config import settings as env_settings
 from backend.deps import optional_jwt, require_jwt
 from backend.models.schemas import (
     BootstrapRequest,
@@ -105,7 +104,6 @@ async def get_status() -> SettingsStatusResponse:
         site_name=site_name,
         entra_configured=entra_cfg is not None,
         entra_secret_expires=entra_cfg.get("secret_expires") if entra_cfg else None,
-        entra_bootstrap_client_id=env_settings.entra_bootstrap_client_id,
     )
 
 
