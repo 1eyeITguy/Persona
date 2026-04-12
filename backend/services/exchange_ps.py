@@ -145,102 +145,29 @@ try {{
         return None
 
 
-def get_shared_mailbox_access(
+def get_mailbox_extended(
     app_id: str,
     cert_path: str,
     tenant_domain: str,
     upn: str,
     cert_password: Optional[str] = None,
-) -> list[dict]:
+) -> dict:
     """
-    Return shared mailboxes that the given user has explicit access to.
+    Return mailbox size + SendAs shared access in a single EXO PS session.
 
-    Each entry: {"display_name": str, "email": str, "access_type": str}
-    access_type is "FullAccess", "SendAs", or "SendOnBehalf".
+    Uses one Connect/Disconnect to avoid spawning two separate PowerShell processes.
 
-    Returns an empty list if EXO PS is not available or no access found.
-    """
-    # Sanitize upn for use in PowerShell (basic guard — UPNs are validated upstream)
-    safe_upn = upn.replace("'", "''")
+    NOTE on FullAccess shared mailboxes: discovering them requires iterating every
+    shared mailbox in the org (Get-MailboxPermission has no -Trustee parameter for
+    inverse lookup). That is O(n) per user view and too slow to include here.
+    Only SendAs is returned — it uses Get-RecipientPermission -Trustee which IS
+    an efficient server-side filter.
 
-    script = f"""
-Import-Module ExchangeOnlineManagement -ErrorAction Stop
-{_connect_snippet(app_id, cert_path, tenant_domain, cert_password)}
-try {{
-    $results = @()
+    Requires these two role assignments on the service principal:
+      New-ManagementRoleAssignment -Role "Mail Recipients"      -App $sp.Identity
+      New-ManagementRoleAssignment -Role "View-Only Recipients" -App $sp.Identity
 
-    # FullAccess permissions on shared mailboxes
-    $mailboxes = Get-Mailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited -ErrorAction SilentlyContinue
-    foreach ($mb in $mailboxes) {{
-        $perms = Get-MailboxPermission -Identity $mb.Identity -User '{safe_upn}' -ErrorAction SilentlyContinue
-        if ($perms) {{
-            foreach ($p in $perms) {{
-                if ($p.AccessRights -contains 'FullAccess') {{
-                    $results += [PSCustomObject]@{{
-                        display_name = $mb.DisplayName
-                        email        = $mb.PrimarySmtpAddress
-                        access_type  = 'FullAccess'
-                    }}
-                }}
-            }}
-        }}
-    }}
-
-    # SendAs permissions
-    $sendAs = Get-RecipientPermission -Trustee '{safe_upn}' -ErrorAction SilentlyContinue
-    foreach ($p in $sendAs) {{
-        if ($p.AccessRights -contains 'SendAs') {{
-            $results += [PSCustomObject]@{{
-                display_name = $p.Identity
-                email        = $p.Identity
-                access_type  = 'SendAs'
-            }}
-        }}
-    }}
-
-    $results | ConvertTo-Json -Depth 3
-}} finally {{
-    {_disconnect_snippet()}
-}}
-"""
-    output, _ = _run_ps(script, timeout=120)
-    if not output:
-        return []
-
-    try:
-        data = json.loads(output)
-        if isinstance(data, dict):
-            data = [data]  # single result
-        if not isinstance(data, list):
-            return []
-
-        seen = set()
-        deduped = []
-        for item in data:
-            key = (item.get("email", ""), item.get("access_type", ""))
-            if key not in seen:
-                seen.add(key)
-                deduped.append({
-                    "display_name": item.get("display_name") or item.get("email") or "",
-                    "email":        item.get("email") or "",
-                    "access_type":  item.get("access_type") or "FullAccess",
-                })
-        return deduped
-    except (json.JSONDecodeError, TypeError) as exc:
-        logger.warning("Could not parse shared mailbox output: %s — raw: %s", exc, output[:200])
-        return []
-
-
-def get_mailbox_size_ps(
-    app_id: str,
-    cert_path: str,
-    tenant_domain: str,
-    upn: str,
-    cert_password: Optional[str] = None,
-) -> Optional[int]:
-    """
-    Return the total mailbox size in bytes for the given UPN via Get-MailboxStatistics.
-    Returns None if EXO PS is unavailable or the call fails.
+    Returns: {"size_bytes": int|None, "shared_access": list[dict]}
     Caller MUST use run_in_threadpool.
     """
     safe_upn = upn.replace("'", "''")
@@ -248,20 +175,69 @@ def get_mailbox_size_ps(
 Import-Module ExchangeOnlineManagement -ErrorAction Stop
 {_connect_snippet(app_id, cert_path, tenant_domain, cert_password)}
 try {{
-    $stats = Get-MailboxStatistics -Identity '{safe_upn}' -ErrorAction Stop
-    $size  = $stats.TotalItemSize.Value.ToBytes()
-    $size | ConvertTo-Json
+    $out = @{{ size_bytes = $null; shared_access = @() }}
+
+    # Mailbox size — requires View-Only Recipients role
+    try {{
+        $stats = Get-MailboxStatistics -Identity '{safe_upn}' -ErrorAction Stop
+        $out.size_bytes = $stats.TotalItemSize.Value.ToBytes()
+    }} catch {{
+        # Role not assigned or mailbox not found — continue without size
+    }}
+
+    # SendAs permissions — efficient server-side filter via -Trustee
+    $sendAs = Get-RecipientPermission -Trustee '{safe_upn}' -ResultSize Unlimited -ErrorAction SilentlyContinue
+    $shared = @()
+    foreach ($p in $sendAs) {{
+        if ($p.AccessRights -contains 'SendAs') {{
+            $shared += [PSCustomObject]@{{
+                display_name = $p.Identity
+                email        = $p.Identity
+                access_type  = 'SendAs'
+            }}
+        }}
+    }}
+    $out.shared_access = $shared
+
+    $out | ConvertTo-Json -Depth 3
 }} finally {{
     {_disconnect_snippet()}
 }}
 """
     output, _ = _run_ps(script, timeout=60)
     if not output:
-        return None
+        return {"size_bytes": None, "shared_access": []}
+
     try:
-        return int(json.loads(output))
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
+        data = json.loads(output)
+        raw_shared = data.get("shared_access") or []
+        if isinstance(raw_shared, dict):
+            raw_shared = [raw_shared]
+        shared = [
+            {
+                "display_name": s.get("display_name") or s.get("email") or "",
+                "email":        s.get("email") or "",
+                "access_type":  s.get("access_type") or "SendAs",
+            }
+            for s in raw_shared if isinstance(s, dict)
+        ]
+        size = data.get("size_bytes")
+        return {
+            "size_bytes":    int(size) if size is not None else None,
+            "shared_access": shared,
+        }
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.warning("Could not parse mailbox extended output: %s — raw: %s", exc, output[:200])
+        return {"size_bytes": None, "shared_access": []}
+
+
+# Keep old names as thin wrappers so the route file doesn't need touching
+def get_mailbox_size_ps(app_id, cert_path, tenant_domain, upn, cert_password=None):
+    return get_mailbox_extended(app_id, cert_path, tenant_domain, upn, cert_password).get("size_bytes")
+
+
+def get_shared_mailbox_access(app_id, cert_path, tenant_domain, upn, cert_password=None):
+    return get_mailbox_extended(app_id, cert_path, tenant_domain, upn, cert_password).get("shared_access", [])
 
 
 def test_ewo_connection(
