@@ -7,7 +7,7 @@ import { useADTree } from '../hooks/useADTree.js'
 // TreeNode — a single row in the directory tree
 // ---------------------------------------------------------------------------
 
-function TreeNode({ node, depth, treeState, onUserSelect, selectedDn, showSyncBadge }) {
+function TreeNode({ node, depth, treeState, onUserSelect, selectedDn }) {
   const { nodeMap, loadingSet, errorMap, expandedSet, toggleExpand } = treeState
   const isLeaf     = node.type === 'user' || node.type === 'computer'
   const isExpanded = expandedSet.has(node.dn)
@@ -92,16 +92,6 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn, showSyncBa
           {node.name}
         </span>
 
-        {/* Sync badge — only for user nodes when showSyncBadge is enabled */}
-        {showSyncBadge && node.type === 'user' && node.is_synced !== null && node.is_synced !== undefined && (
-          <span className={`ml-1 inline-flex items-center rounded px-1 py-0 text-[9px] font-bold leading-4 shrink-0 ${
-            node.is_synced
-              ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-              : 'bg-slate-500/20 text-slate-400 border border-slate-600/30'
-          }`}>
-            {node.is_synced ? 'S' : 'AD'}
-          </span>
-        )}
       </div>
 
       {/* Inline error for this node */}
@@ -125,7 +115,6 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn, showSyncBa
             treeState={treeState}
             onUserSelect={onUserSelect}
             selectedDn={selectedDn}
-            showSyncBadge={showSyncBadge}
           />
         ))}
     </div>
@@ -136,7 +125,7 @@ function TreeNode({ node, depth, treeState, onUserSelect, selectedDn, showSyncBa
 // ADTree — root component
 // ---------------------------------------------------------------------------
 
-export default function ADTree({ onUserSelect, selectedDn, mode = 'users', showSyncBadge = false }) {
+export default function ADTree({ onUserSelect, selectedDn, mode = 'users' }) {
   const { getToken } = useAuth()
   const treeState = useADTree(getToken, mode)
   const { nodeMap, loadingSet, errorMap, rootDn, fetchRoot } = treeState
@@ -179,7 +168,6 @@ export default function ADTree({ onUserSelect, selectedDn, mode = 'users', showS
           treeState={treeState}
           onUserSelect={onUserSelect}
           selectedDn={selectedDn}
-          showSyncBadge={showSyncBadge}
         />
       ))}
     </div>

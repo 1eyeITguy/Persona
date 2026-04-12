@@ -75,7 +75,6 @@ export default function SyncedUsersPage() {
             ) : (
               <ADTree
                 mode="synced-users"
-                showSyncBadge
                 onUserSelect={setSelectedUserDn}
                 selectedDn={selectedUserDn}
               />
