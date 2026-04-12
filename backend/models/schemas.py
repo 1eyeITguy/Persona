@@ -300,6 +300,7 @@ class EntraDevice(BaseModel):
     # Cross-service ID links (needed for targeted offboarding)
     intune_device_id: Optional[str] = None  # Intune managedDevice.id (None for Entra-only devices)
     entra_device_id: Optional[str] = None   # Entra device object ID
+    serial_number: Optional[str] = None     # Serial number — used for Autopilot lookup during offboarding
 
     operating_system: Optional[str] = None
     os_version: Optional[str] = None
@@ -325,6 +326,7 @@ class DeviceOffboardItem(BaseModel):
     device_id: str
     intune_device_id: Optional[str] = None
     entra_device_id: Optional[str] = None
+    serial_number: Optional[str] = None     # used for Autopilot lookup by serial number
     display_name: Optional[str] = None      # for audit logging only
     remove_from_intune: bool = True
     remove_from_autopilot: bool = True

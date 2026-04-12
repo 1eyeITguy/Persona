@@ -66,6 +66,7 @@ export default function DeviceOffboardModal({ devices, getToken, onClose, onComp
         device_id:             d.device_id,
         intune_device_id:      d.intune_device_id ?? null,
         entra_device_id:       d.entra_device_id  ?? null,
+        serial_number:         d.serial_number    ?? null,
         display_name:          d.display_name     ?? null,
         ...selections[d.device_id],
       })),

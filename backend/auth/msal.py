@@ -702,22 +702,21 @@ def get_entra_user_devices(
     token = result["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    devices: dict[str, dict] = {}  # intune_device_id → dict
-
-    # Sentinel: azureADDeviceId is this string when the device isn't Entra-joined
-    _ZERO_GUID = "00000000-0000-0000-0000-000000000000"
+    devices: dict[str, dict] = {}  # intune_device_id (or entra_object_id) → dict
 
     # ── 1. Intune managed devices ──────────────────────────────────────────────
+    # serialNumber is fetched so Autopilot can be looked up by serial during offboarding
+    # (mirrors the approach in IntuneOffboardingTool which filters Autopilot by serialNumber).
     intune_select = (
         "id,deviceName,operatingSystem,osVersion,model,manufacturer,"
         "complianceState,managementState,enrolledDateTime,lastSyncDateTime,"
-        "managedDeviceOwnerType,azureADDeviceId"
+        "managedDeviceOwnerType,serialNumber"
     )
-    # Separate lookup: azureADDeviceId → intune key.
-    # NOTE: managedDevice.azureADDeviceId == device.deviceId on the Entra side,
-    # which is a DIFFERENT field from device.id (the Object ID).
-    # We use this map to match records during the Entra registered-devices pass.
-    azure_ad_device_id_to_intune_key: dict[str, str] = {}
+    # Name-based lookup: normalised device name → intune key.
+    # Matching Intune ↔ Entra by device name is the same approach used by the
+    # IntuneOffboardingTool reference implementation and is more reliable than
+    # trying to correlate azureADDeviceId with device.deviceId across endpoints.
+    intune_name_to_key: dict[str, str] = {}
 
     try:
         resp = _requests.get(
@@ -735,19 +734,18 @@ def get_entra_user_devices(
                     else "personal" if raw_owner == "personal"
                     else None
                 )
-                # azureADDeviceId corresponds to device.deviceId on the Entra side
-                # (NOT device.id). Filter out zero GUIDs (not Entra-joined).
-                raw_azure_id = d.get("azureADDeviceId") or ""
-                azure_ad_id = raw_azure_id if (raw_azure_id and raw_azure_id != _ZERO_GUID) else None
+                device_name = d.get("deviceName") or ""
+                serial = d.get("serialNumber") or None
 
-                if azure_ad_id:
-                    azure_ad_device_id_to_intune_key[azure_ad_id] = device_id
+                if device_name:
+                    intune_name_to_key[device_name.lower()] = device_id
 
                 devices[device_id] = {
                     "device_id": device_id,
                     "intune_device_id": device_id,
-                    "entra_device_id": None,    # set during Entra pass (needs Entra object ID)
-                    "display_name": d.get("deviceName"),
+                    "entra_device_id": None,    # populated during Entra pass
+                    "serial_number": serial,
+                    "display_name": device_name or None,
                     "device_type": "intune",
                     "operating_system": d.get("operatingSystem"),
                     "os_version": d.get("osVersion"),
@@ -761,8 +759,8 @@ def get_entra_user_devices(
                     "trust_type": None,
                     "ownership": ownership,
                     "in_intune": True,
-                    "in_entra": azure_ad_id is not None,  # confirmed during Entra pass
-                    "in_autopilot": False,                 # refined during Entra pass
+                    "in_entra": False,      # set True when Entra record is matched by name
+                    "in_autopilot": False,  # set True when Entra physicalIds has [ZTDID]
                 }
         elif resp.status_code == 403:
             logger.debug(
@@ -773,11 +771,10 @@ def get_entra_user_devices(
         logger.debug("Intune devices fetch error for %s: %s", object_id, exc)
 
     # ── 2. Entra registered / joined devices ───────────────────────────────────
-    # We fetch deviceId (= azureADDeviceId on Intune side) for dedup matching,
-    # and physicalIds to detect Autopilot ([ZTDID] tag).
-    # device.id is the Entra Object ID, used for DELETE /devices/{id}.
+    # physicalIds contains [ZTDID] entries for Autopilot-enrolled devices.
+    # device.id is the Entra Object ID needed for DELETE /devices/{id}.
     entra_select = (
-        "id,deviceId,displayName,operatingSystem,operatingSystemVersion,model,manufacturer,"
+        "id,displayName,operatingSystem,operatingSystemVersion,model,manufacturer,"
         "trustType,approximateLastSignInDateTime,physicalIds"
     )
     try:
@@ -789,22 +786,22 @@ def get_entra_user_devices(
         )
         if resp.ok:
             for d in resp.json().get("value", []):
-                entra_object_id = d.get("id", "")          # Object ID → used for DELETE /devices/{id}
-                entra_device_id = d.get("deviceId") or ""  # device.deviceId → matches azureADDeviceId
+                entra_object_id = d.get("id", "")
+                display_name = d.get("displayName") or ""
                 physical_ids = d.get("physicalIds") or []
                 in_autopilot = any(p.startswith("[ZTDID]") for p in physical_ids)
 
-                # Check if this Entra device corresponds to an Intune-managed device
-                intune_key = azure_ad_device_id_to_intune_key.get(entra_device_id)
+                # Match to an Intune record by device name (case-insensitive)
+                intune_key = intune_name_to_key.get(display_name.lower()) if display_name else None
                 if intune_key:
-                    # Merge Entra-side data into the existing Intune record
-                    devices[intune_key]["entra_device_id"] = entra_object_id  # now we have the real Object ID
+                    # Merge Entra data into the existing Intune record
+                    devices[intune_key]["entra_device_id"] = entra_object_id
                     devices[intune_key]["in_entra"] = True
                     devices[intune_key]["in_autopilot"] = in_autopilot
                     continue
 
                 if entra_object_id in devices:
-                    continue  # edge case: already keyed by this Entra Object ID
+                    continue  # edge case: already keyed by this ID
 
                 # Entra-only device — infer ownership from trustType
                 trust = d.get("trustType")
@@ -819,7 +816,8 @@ def get_entra_user_devices(
                     "device_id": entra_object_id,
                     "intune_device_id": None,
                     "entra_device_id": entra_object_id,
-                    "display_name": d.get("displayName"),
+                    "serial_number": None,
+                    "display_name": display_name or None,
                     "device_type": "entra",
                     "operating_system": d.get("operatingSystem"),
                     "os_version": d.get("operatingSystemVersion"),
@@ -936,13 +934,17 @@ def offboard_device(
         results.append({"service": "intune", "attempted": False, "success": False, "error": None})
 
     # ── Step 2: Autopilot ──────────────────────────────────────────────────────
-    if item.get("remove_from_autopilot") and intune_id and headers:
+    # Look up by serial number — same approach as IntuneOffboardingTool reference:
+    #   Get-MgDeviceManagementWindowsAutopilotDeviceIdentity
+    #     -Filter "contains(serialNumber,'$serialNumber')"
+    serial_number = item.get("serial_number")
+    if item.get("remove_from_autopilot") and serial_number and headers:
         autopilot_id: str | None = None
         try:
             lookup = _requests.get(
                 f"{_GRAPH_BASE}/deviceManagement/windowsAutopilotDeviceIdentities",
                 headers=headers,
-                params={"$filter": f"managedDeviceId eq '{intune_id}'", "$select": "id"},
+                params={"$filter": f"contains(serialNumber,'{serial_number}')", "$select": "id,serialNumber"},
                 timeout=15,
             )
             if lookup.ok:
@@ -988,8 +990,8 @@ def offboard_device(
             except Exception as exc:
                 logger.warning("Offboard [%s]: autopilot → exception: %s", display_name, exc)
                 results.append({"service": "autopilot", "attempted": True, "success": False, "error": str(exc)})
-    elif item.get("remove_from_autopilot") and not intune_id:
-        results.append({"service": "autopilot", "attempted": False, "success": False, "error": "No Intune device ID for Autopilot lookup"})
+    elif item.get("remove_from_autopilot") and not serial_number:
+        results.append({"service": "autopilot", "attempted": False, "success": False, "error": "No serial number available for Autopilot lookup"})
     else:
         results.append({"service": "autopilot", "attempted": False, "success": False, "error": None})
 
