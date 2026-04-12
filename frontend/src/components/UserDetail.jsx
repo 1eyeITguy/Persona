@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext.jsx'
 import { getInitials, formatDate } from '../utils.js'
 import teamsIconUrl from '../assets/teams-icon.jpg'
 import ExchangeTab from './ExchangeTab.jsx'
+import DeviceOffboardModal from './DeviceOffboardModal.jsx'
 
 // ---------------------------------------------------------------------------
 // Status badge (supports optional label prefix like "AD:" or "Entra:")
@@ -1485,48 +1486,103 @@ export function LicenseCardList({ entraObjectId, assignedLicenses = [] }) {
   )
 }
 
-export function EntraDeviceCard({ device }) {
+// Service presence badge — lit when device is enrolled, struck-through when absent
+function ServiceBadge({ label, active }) {
+  if (!active) return (
+    <span className="inline-flex items-center rounded-full border border-border-subtle/40 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 line-through">
+      {label}
+    </span>
+  )
+  return (
+    <span className="inline-flex items-center rounded-full border border-brand-primary/40 bg-brand-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-brand-primary">
+      {label}
+    </span>
+  )
+}
+
+export function EntraDeviceCard({ device, selectable = false, selected = false, onToggle = null }) {
   const complianceCls = COMPLIANCE_STYLES[device.compliance_state?.toLowerCase()] ?? COMPLIANCE_STYLES.unknown
   const isIntune = device.device_type === 'intune'
+  const isCorporate = device.ownership === 'corporate'
+  const isClickable = selectable && isCorporate
 
   return (
-    <li className="rounded-md border border-border-subtle bg-app-bg/60 px-3 py-2.5 space-y-1">
+    <li
+      className={`rounded-md border bg-app-bg/60 px-3 py-2.5 space-y-1 transition-colors ${
+        isClickable
+          ? selected
+            ? 'border-danger/40 bg-danger/5 cursor-pointer'
+            : 'border-border-subtle cursor-pointer hover:border-slate-600'
+          : 'border-border-subtle'
+      }`}
+      onClick={isClickable ? () => onToggle?.(device.device_id) : undefined}
+    >
       <div className="flex items-center gap-2">
+        {isClickable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggle?.(device.device_id)}
+            onClick={e => e.stopPropagation()}
+            className="shrink-0 accent-danger"
+          />
+        )}
         <Monitor className="h-4 w-4 shrink-0 text-slate-500" />
         <p className="flex-1 truncate text-sm font-medium text-slate-200">
           {device.display_name || 'Unknown device'}
         </p>
+        {/* Ownership badge */}
+        {isCorporate && (
+          <span className="inline-flex items-center rounded-full border border-slate-500/30 bg-slate-700/40 px-2 py-0.5 text-xs font-medium text-slate-300">
+            Corporate
+          </span>
+        )}
+        {device.ownership === 'personal' && (
+          <span className="inline-flex items-center rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-xs font-medium text-purple-300">
+            Personal
+          </span>
+        )}
+        {device.ownership == null && (
+          <span className="inline-flex items-center rounded-full border border-slate-600/30 bg-slate-700/20 px-2 py-0.5 text-xs font-medium text-slate-500 italic">
+            Unknown
+          </span>
+        )}
+        {/* Compliance badge (Intune only) */}
         {isIntune && device.compliance_state && (
           <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${complianceCls}`}>
             {device.compliance_state}
           </span>
         )}
-        {!isIntune && (
-          <span className="inline-flex items-center rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-300">
-            {device.trust_type ?? 'Registered'}
-          </span>
-        )}
       </div>
 
       {(device.operating_system || device.os_version) && (
-        <p className="pl-6 text-xs text-slate-400">
+        <p className={`text-xs text-slate-400 ${isClickable ? 'pl-12' : 'pl-6'}`}>
           {[device.operating_system, device.os_version].filter(Boolean).join(' · ')}
         </p>
       )}
 
       {(device.manufacturer || device.model) && (
-        <p className="pl-6 text-xs text-slate-500">
+        <p className={`text-xs text-slate-500 ${isClickable ? 'pl-12' : 'pl-6'}`}>
           {[device.manufacturer, device.model].filter(Boolean).join(' ')}
         </p>
       )}
 
+      {/* Service presence badges — corporate devices only */}
+      {isCorporate && (
+        <div className={`flex items-center gap-1.5 flex-wrap ${isClickable ? 'pl-12' : 'pl-6'}`}>
+          <ServiceBadge label="Entra ID"  active={device.in_entra}    />
+          <ServiceBadge label="Intune"    active={device.in_intune}   />
+          <ServiceBadge label="Autopilot" active={device.in_autopilot}/>
+        </div>
+      )}
+
       {isIntune && device.last_sync_date_time && (
-        <p className="pl-6 text-xs text-slate-600">
+        <p className={`text-xs text-slate-600 ${isClickable ? 'pl-12' : 'pl-6'}`}>
           Last sync: {new Date(device.last_sync_date_time).toLocaleDateString()}
         </p>
       )}
       {!isIntune && device.last_sync_date_time && (
-        <p className="pl-6 text-xs text-slate-600">
+        <p className={`text-xs text-slate-600 ${isClickable ? 'pl-12' : 'pl-6'}`}>
           Last seen: {new Date(device.last_sync_date_time).toLocaleDateString()}
         </p>
       )}
@@ -1546,12 +1602,23 @@ function DevicesTab({ userDn, isSynced, entraObjectId, getToken }) {
   const [devices, setDevices] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [offboardOpen, setOffboardOpen] = useState(false)
+
+  function toggleDevice(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
 
   useEffect(() => {
     if (!userDn) return
     setDevices(null)
     setError(null)
     setLoading(true)
+    setSelectedIds(new Set())
     const token = getToken()
     const headers = token ? { Authorization: `Bearer ${token}` } : {}
 
@@ -1662,10 +1729,47 @@ function DevicesTab({ userDn, isSynced, entraObjectId, getToken }) {
     )
   }
 
+  const selectedDevices = devices ? devices.filter(d => selectedIds.has(d.device_id)) : []
+
   return (
-    <ul className="space-y-2">
-      {devices.map(d => <EntraDeviceCard key={d.device_id} device={d} />)}
-    </ul>
+    <div className="space-y-3">
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between rounded-md border border-danger/30 bg-danger/5 px-3 py-2">
+          <span className="text-xs text-slate-400">
+            {selectedIds.size} device{selectedIds.size !== 1 ? 's' : ''} selected
+          </span>
+          <button
+            onClick={() => setOffboardOpen(true)}
+            className="flex items-center gap-1.5 rounded-md bg-danger px-3 py-1.5 text-xs font-medium text-white hover:bg-danger/80 transition-colors"
+          >
+            Offboard {selectedIds.size > 1 ? `${selectedIds.size} Devices` : 'Device'}
+          </button>
+        </div>
+      )}
+      <ul className="space-y-2">
+        {devices.map(d => (
+          <EntraDeviceCard
+            key={d.device_id}
+            device={d}
+            selectable={isSynced}
+            selected={selectedIds.has(d.device_id)}
+            onToggle={toggleDevice}
+          />
+        ))}
+      </ul>
+      {offboardOpen && selectedDevices.length > 0 && (
+        <DeviceOffboardModal
+          devices={selectedDevices}
+          getToken={getToken}
+          onClose={() => setOffboardOpen(false)}
+          onComplete={() => {
+            setOffboardOpen(false)
+            setSelectedIds(new Set())
+            setDevices(null)  // force re-fetch on next render
+          }}
+        />
+      )}
+    </div>
   )
 }
 

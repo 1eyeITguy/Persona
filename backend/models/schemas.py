@@ -293,9 +293,14 @@ class EntraDevice(BaseModel):
     Returned by GET /api/v1/entra/users/{object_id}/devices.
     """
 
-    device_id: str                          # Entra device object ID or Intune device ID
+    device_id: str                          # Primary key: Intune device ID if in Intune, else Entra object ID
     display_name: Optional[str] = None
     device_type: str = "intune"             # "intune" | "entra"
+
+    # Cross-service ID links (needed for targeted offboarding)
+    intune_device_id: Optional[str] = None  # Intune managedDevice.id (None for Entra-only devices)
+    entra_device_id: Optional[str] = None   # Entra device object ID
+
     operating_system: Optional[str] = None
     os_version: Optional[str] = None
     model: Optional[str] = None
@@ -306,6 +311,54 @@ class EntraDevice(BaseModel):
     last_sync_date_time: Optional[str] = None  # ISO 8601
     is_managed: bool = True
     trust_type: Optional[str] = None        # "AzureAd" | "Workplace" | "ServerAd" (Entra only)
+
+    # Ownership and service presence
+    ownership: Optional[str] = None         # "corporate" | "personal" | None (unknown)
+    in_intune: bool = False
+    in_entra: bool = False
+    in_autopilot: bool = False
+
+
+class DeviceOffboardItem(BaseModel):
+    """A single device to offboard with per-service flags."""
+
+    device_id: str
+    intune_device_id: Optional[str] = None
+    entra_device_id: Optional[str] = None
+    display_name: Optional[str] = None      # for audit logging only
+    remove_from_intune: bool = True
+    remove_from_autopilot: bool = True
+    remove_from_entra: bool = True
+    remove_from_ad: bool = False            # disable on-prem AD computer object
+
+
+class DeviceOffboardRequest(BaseModel):
+    """Body for POST /api/v1/entra/devices/offboard."""
+
+    devices: list[DeviceOffboardItem]
+
+
+class DeviceServiceResult(BaseModel):
+    """Result for one service step within a single device offboard."""
+
+    service: str                            # "intune" | "autopilot" | "entra" | "ad"
+    attempted: bool
+    success: bool
+    error: Optional[str] = None
+
+
+class DeviceOffboardItemResult(BaseModel):
+    """Per-device offboard result."""
+
+    device_id: str
+    display_name: Optional[str] = None
+    results: list[DeviceServiceResult]
+
+
+class DeviceOffboardResult(BaseModel):
+    """Response for POST /api/v1/entra/devices/offboard."""
+
+    items: list[DeviceOffboardItemResult]
 
 
 class EntraOnlyUser(BaseModel):

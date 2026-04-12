@@ -33,10 +33,14 @@ from backend.auth.msal import (
     get_entra_user_devices,
     get_entra_user_photo,
     get_tenant_licenses,
+    offboard_device,
     test_entra_connection as _test_entra,
 )
 from backend.deps import require_jwt
 from backend.models.schemas import (
+    DeviceOffboardRequest,
+    DeviceOffboardResult,
+    DeviceOffboardItemResult,
     EntraConfigResponse,
     EntraConfigUpdate,
     EntraDevice,
@@ -236,6 +240,49 @@ async def get_user_devices(
         object_id,
     )
     return [EntraDevice(**d) for d in raw]
+
+
+@router.post("/devices/offboard", response_model=DeviceOffboardResult)
+async def offboard_devices(
+    request: DeviceOffboardRequest,
+    _token: dict = Depends(require_jwt),
+) -> DeviceOffboardResult:
+    """
+    Offboard one or more corporate devices from Intune, Autopilot, Entra ID, and/or AD.
+
+    Processes each device sequentially in the required order:
+      Intune → Autopilot → Entra ID → AD
+
+    Does NOT short-circuit on partial failure — all steps are attempted for each device.
+    Returns per-device, per-service results.
+
+    Required Graph permissions on the app registration:
+      DeviceManagementManagedDevices.ReadWrite.All
+      DeviceManagementServiceConfig.Read.All
+      DeviceManagementServiceConfig.ReadWrite.All
+      Device.ReadWrite.All
+
+    JWT required.
+    """
+    cfg = get_entra_settings()
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="Entra ID is not configured.")
+
+    if not request.devices:
+        raise HTTPException(status_code=400, detail="No devices specified.")
+
+    item_results = []
+    for item in request.devices:
+        result = await run_in_threadpool(
+            offboard_device,
+            cfg["tenant_id"],
+            cfg["client_id"],
+            cfg["client_secret"],
+            item.model_dump(),
+        )
+        item_results.append(DeviceOffboardItemResult(**result))
+
+    return DeviceOffboardResult(items=item_results)
 
 
 @router.post("/users/{object_id}/assign-licenses")

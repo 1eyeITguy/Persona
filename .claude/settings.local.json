@@ -16,7 +16,8 @@
       "Bash(sed -n '7,12p' /c/git/personal/Persona/frontend/src/components/SearchResults.jsx)",
       "Bash(sed -n '10,15p' /c/git/personal/Persona/frontend/src/components/UserDetail.jsx)",
       "Bash(sed -n '17,28p' /c/git/personal/Persona/frontend/src/components/UserDetail.jsx)",
-      "Bash(sed -n '10,18p' /c/git/personal/Persona/frontend/src/components/DeviceDetail.jsx)"
+      "Bash(sed -n '10,18p' /c/git/personal/Persona/frontend/src/components/DeviceDetail.jsx)",
+      "mcp__claude_ai_Microsoft_Learn__microsoft_docs_search"
     ]
   }
 }

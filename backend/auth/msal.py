@@ -675,8 +675,10 @@ def get_entra_user_devices(
       2. Entra registered devices — GET /users/{id}/registeredDevices
          Requires: Device.Read.All
 
-    Results are deduplicated by device ID. Intune entries take precedence
-    (richer data) when the same device appears in both lists.
+    Results are deduplicated by matching the Intune device's azureADDeviceId
+    against the Entra registered device's id. The Intune record takes precedence
+    (richer data); Entra-side physicalIds are merged in to detect Autopilot
+    enrollment ([ZTDID] tag).
 
     Returns a list of dicts matching the EntraDevice schema.
     Caller MUST use run_in_threadpool.
@@ -700,13 +702,13 @@ def get_entra_user_devices(
     token = result["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    devices: dict[str, dict] = {}  # device_id → dict, Intune takes precedence
+    devices: dict[str, dict] = {}  # intune_device_id → dict
 
     # ── 1. Intune managed devices ──────────────────────────────────────────────
     intune_select = (
         "id,deviceName,operatingSystem,osVersion,model,manufacturer,"
         "complianceState,managementState,enrolledDateTime,lastSyncDateTime,"
-        "managedDeviceOwnerType"
+        "managedDeviceOwnerType,azureADDeviceId"
     )
     try:
         resp = _requests.get(
@@ -718,8 +720,17 @@ def get_entra_user_devices(
         if resp.ok:
             for d in resp.json().get("value", []):
                 device_id = d.get("id", "")
+                raw_owner = d.get("managedDeviceOwnerType", "")
+                ownership = (
+                    "corporate" if raw_owner == "company"
+                    else "personal" if raw_owner == "personal"
+                    else None
+                )
+                azure_ad_id = d.get("azureADDeviceId") or None
                 devices[device_id] = {
                     "device_id": device_id,
+                    "intune_device_id": device_id,
+                    "entra_device_id": azure_ad_id,
                     "display_name": d.get("deviceName"),
                     "device_type": "intune",
                     "operating_system": d.get("operatingSystem"),
@@ -732,6 +743,10 @@ def get_entra_user_devices(
                     "last_sync_date_time": d.get("lastSyncDateTime"),
                     "is_managed": True,
                     "trust_type": None,
+                    "ownership": ownership,
+                    "in_intune": True,
+                    "in_entra": azure_ad_id is not None,
+                    "in_autopilot": False,  # refined during Entra pass
                 }
         elif resp.status_code == 403:
             logger.debug(
@@ -741,8 +756,19 @@ def get_entra_user_devices(
     except Exception as exc:
         logger.debug("Intune devices fetch error for %s: %s", object_id, exc)
 
+    # Build a reverse map: entra_device_id → intune_device_id key
+    # Used to merge physicalIds (Autopilot marker) from the Entra pass.
+    entra_id_to_intune_key: dict[str, str] = {
+        v["entra_device_id"]: k
+        for k, v in devices.items()
+        if v.get("entra_device_id")
+    }
+
     # ── 2. Entra registered / joined devices ───────────────────────────────────
-    entra_select = "id,displayName,operatingSystem,operatingSystemVersion,model,manufacturer,trustType,approximateLastSignInDateTime"
+    entra_select = (
+        "id,displayName,operatingSystem,operatingSystemVersion,model,manufacturer,"
+        "trustType,approximateLastSignInDateTime,physicalIds"
+    )
     try:
         resp = _requests.get(
             f"{_GRAPH_BASE}/users/{object_id}/registeredDevices",
@@ -753,10 +779,32 @@ def get_entra_user_devices(
         if resp.ok:
             for d in resp.json().get("value", []):
                 device_id = d.get("id", "")
+                physical_ids = d.get("physicalIds") or []
+                in_autopilot = any(p.startswith("[ZTDID]") for p in physical_ids)
+
+                intune_key = entra_id_to_intune_key.get(device_id)
+                if intune_key:
+                    # Merge Autopilot status into the existing Intune record
+                    devices[intune_key]["in_entra"] = True
+                    devices[intune_key]["in_autopilot"] = in_autopilot
+                    continue
+
                 if device_id in devices:
-                    continue  # Intune record already present — skip
+                    continue  # already keyed by Entra ID (edge case)
+
+                # Entra-only device — infer ownership from trustType
+                trust = d.get("trustType")
+                if trust in ("AzureAd", "ServerAd"):
+                    ownership = "corporate"
+                elif trust == "Workplace":
+                    ownership = "personal"
+                else:
+                    ownership = None
+
                 devices[device_id] = {
                     "device_id": device_id,
+                    "intune_device_id": None,
+                    "entra_device_id": device_id,
                     "display_name": d.get("displayName"),
                     "device_type": "entra",
                     "operating_system": d.get("operatingSystem"),
@@ -768,7 +816,11 @@ def get_entra_user_devices(
                     "enrolled_date_time": None,
                     "last_sync_date_time": d.get("approximateLastSignInDateTime"),
                     "is_managed": False,
-                    "trust_type": d.get("trustType"),
+                    "trust_type": trust,
+                    "ownership": ownership,
+                    "in_intune": False,
+                    "in_entra": True,
+                    "in_autopilot": in_autopilot,
                 }
         elif resp.status_code == 403:
             logger.debug(
@@ -779,6 +831,239 @@ def get_entra_user_devices(
         logger.debug("Entra registered devices fetch error for %s: %s", object_id, exc)
 
     return sorted(devices.values(), key=lambda d: (d.get("display_name") or "").lower())
+
+
+def offboard_device(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    item: dict,
+) -> dict:
+    """
+    Offboard a single device from Intune, Autopilot, and/or Entra ID.
+
+    Deletion order is enforced: Intune → Autopilot → Entra → AD.
+    Each step runs independently — a failure does NOT abort subsequent steps.
+
+    Required Graph permissions on the app registration:
+      DeviceManagementManagedDevices.ReadWrite.All  (Intune delete)
+      DeviceManagementServiceConfig.Read.All        (Autopilot lookup)
+      DeviceManagementServiceConfig.ReadWrite.All   (Autopilot delete)
+      Device.ReadWrite.All                          (Entra delete)
+
+    For AD: requires LDAP write access via the configured service account.
+
+    Returns a DeviceOffboardItemResult-shaped dict.
+    Caller MUST use run_in_threadpool.
+    """
+    display_name = item.get("display_name") or item.get("device_id", "unknown")
+    results: list[dict] = []
+
+    # ── Acquire Graph token ────────────────────────────────────────────────────
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    headers: dict[str, str] = {}
+    try:
+        app = msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=authority,
+        )
+        token_result = app.acquire_token_for_client(
+            scopes=["https://graph.microsoft.com/.default"]
+        )
+        if "access_token" in token_result:
+            headers = {"Authorization": f"Bearer {token_result['access_token']}"}
+        else:
+            # Token acquisition failed — all Graph steps will be skipped
+            for svc in ("intune", "autopilot", "entra"):
+                results.append({
+                    "service": svc,
+                    "attempted": False,
+                    "success": False,
+                    "error": "Could not acquire Graph token",
+                })
+    except Exception as exc:
+        for svc in ("intune", "autopilot", "entra"):
+            results.append({
+                "service": svc,
+                "attempted": False,
+                "success": False,
+                "error": str(exc),
+            })
+
+    intune_id = item.get("intune_device_id")
+    entra_id = item.get("entra_device_id")
+
+    # ── Step 1: Intune ─────────────────────────────────────────────────────────
+    if item.get("remove_from_intune") and intune_id and headers:
+        try:
+            resp = _requests.delete(
+                f"{_GRAPH_BASE}/deviceManagement/managedDevices/{intune_id}",
+                headers=headers,
+                timeout=15,
+            )
+            if resp.status_code in (204, 404):
+                logger.info("Offboard [%s]: intune → removed (status %s)", display_name, resp.status_code)
+                results.append({"service": "intune", "attempted": True, "success": True, "error": None})
+            else:
+                err = f"HTTP {resp.status_code}"
+                try:
+                    err = resp.json().get("error", {}).get("message", err)
+                except Exception:
+                    pass
+                logger.warning("Offboard [%s]: intune → failed (%s)", display_name, err)
+                results.append({"service": "intune", "attempted": True, "success": False, "error": err})
+        except Exception as exc:
+            logger.warning("Offboard [%s]: intune → exception: %s", display_name, exc)
+            results.append({"service": "intune", "attempted": True, "success": False, "error": str(exc)})
+    elif item.get("remove_from_intune") and not intune_id:
+        results.append({"service": "intune", "attempted": False, "success": False, "error": "No Intune device ID"})
+    else:
+        results.append({"service": "intune", "attempted": False, "success": False, "error": None})
+
+    # ── Step 2: Autopilot ──────────────────────────────────────────────────────
+    if item.get("remove_from_autopilot") and intune_id and headers:
+        autopilot_id: str | None = None
+        try:
+            lookup = _requests.get(
+                f"{_GRAPH_BASE}/deviceManagement/windowsAutopilotDeviceIdentities",
+                headers=headers,
+                params={"$filter": f"managedDeviceId eq '{intune_id}'", "$select": "id"},
+                timeout=15,
+            )
+            if lookup.ok:
+                values = lookup.json().get("value", [])
+                if values:
+                    autopilot_id = values[0].get("id")
+            elif lookup.status_code == 403:
+                logger.debug("Offboard [%s]: autopilot lookup — permission denied", display_name)
+                results.append({
+                    "service": "autopilot",
+                    "attempted": False,
+                    "success": False,
+                    "error": "DeviceManagementServiceConfig.Read.All not granted",
+                })
+                autopilot_id = None
+        except Exception as exc:
+            logger.warning("Offboard [%s]: autopilot lookup exception: %s", display_name, exc)
+            results.append({"service": "autopilot", "attempted": False, "success": False, "error": str(exc)})
+            autopilot_id = None
+
+        if autopilot_id is None and not any(r["service"] == "autopilot" for r in results):
+            # Not enrolled in Autopilot
+            logger.info("Offboard [%s]: autopilot → not enrolled (skipped)", display_name)
+            results.append({"service": "autopilot", "attempted": False, "success": False, "error": None})
+        elif autopilot_id:
+            try:
+                del_resp = _requests.delete(
+                    f"{_GRAPH_BASE}/deviceManagement/windowsAutopilotDeviceIdentities/{autopilot_id}",
+                    headers=headers,
+                    timeout=15,
+                )
+                if del_resp.status_code in (204, 404):
+                    logger.info("Offboard [%s]: autopilot → removed", display_name)
+                    results.append({"service": "autopilot", "attempted": True, "success": True, "error": None})
+                else:
+                    err = f"HTTP {del_resp.status_code}"
+                    try:
+                        err = del_resp.json().get("error", {}).get("message", err)
+                    except Exception:
+                        pass
+                    logger.warning("Offboard [%s]: autopilot → failed (%s)", display_name, err)
+                    results.append({"service": "autopilot", "attempted": True, "success": False, "error": err})
+            except Exception as exc:
+                logger.warning("Offboard [%s]: autopilot → exception: %s", display_name, exc)
+                results.append({"service": "autopilot", "attempted": True, "success": False, "error": str(exc)})
+    elif item.get("remove_from_autopilot") and not intune_id:
+        results.append({"service": "autopilot", "attempted": False, "success": False, "error": "No Intune device ID for Autopilot lookup"})
+    else:
+        results.append({"service": "autopilot", "attempted": False, "success": False, "error": None})
+
+    # ── Step 3: Entra ID ───────────────────────────────────────────────────────
+    if item.get("remove_from_entra") and entra_id and headers:
+        try:
+            resp = _requests.delete(
+                f"{_GRAPH_BASE}/devices/{entra_id}",
+                headers=headers,
+                timeout=15,
+            )
+            if resp.status_code in (204, 404):
+                logger.info("Offboard [%s]: entra → removed (status %s)", display_name, resp.status_code)
+                results.append({"service": "entra", "attempted": True, "success": True, "error": None})
+            else:
+                err = f"HTTP {resp.status_code}"
+                try:
+                    err = resp.json().get("error", {}).get("message", err)
+                except Exception:
+                    pass
+                logger.warning("Offboard [%s]: entra → failed (%s)", display_name, err)
+                results.append({"service": "entra", "attempted": True, "success": False, "error": err})
+        except Exception as exc:
+            logger.warning("Offboard [%s]: entra → exception: %s", display_name, exc)
+            results.append({"service": "entra", "attempted": True, "success": False, "error": str(exc)})
+    elif item.get("remove_from_entra") and not entra_id:
+        results.append({"service": "entra", "attempted": False, "success": False, "error": "No Entra device ID"})
+    else:
+        results.append({"service": "entra", "attempted": False, "success": False, "error": None})
+
+    # ── Step 4: AD computer disable ────────────────────────────────────────────
+    if item.get("remove_from_ad") and display_name and display_name != "unknown":
+        try:
+            from backend.auth.ldap import _load_ldap_settings, get_service_connection
+            from ldap3.utils.conv import escape_filter_chars
+            from ldap3 import SUBTREE, MODIFY_REPLACE
+
+            ldap_cfg = _load_ldap_settings()
+            if ldap_cfg is None:
+                results.append({
+                    "service": "ad",
+                    "attempted": False,
+                    "success": False,
+                    "error": "LDAP not configured",
+                })
+            else:
+                conn = get_service_connection()
+                safe_name = escape_filter_chars(display_name)
+                conn.search(
+                    search_base=ldap_cfg.base_dn,
+                    search_filter=f"(&(objectClass=computer)(cn={safe_name}))",
+                    search_scope=SUBTREE,
+                    attributes=["userAccountControl"],
+                    size_limit=1,
+                )
+                if not conn.entries:
+                    logger.info("Offboard [%s]: ad → computer not found in AD", display_name)
+                    results.append({
+                        "service": "ad",
+                        "attempted": False,
+                        "success": False,
+                        "error": "Computer not found in Active Directory",
+                    })
+                else:
+                    entry = conn.entries[0]
+                    uac_val = int(entry.userAccountControl.value or 0)
+                    new_uac = uac_val | 0x0002  # set ACCOUNTDISABLE bit
+                    dn = entry.entry_dn
+                    conn.modify(dn, {"userAccountControl": [(MODIFY_REPLACE, [new_uac])]})
+                    if conn.result["result"] == 0:
+                        logger.info("Offboard [%s]: ad → disabled (DN: %s)", display_name, dn)
+                        results.append({"service": "ad", "attempted": True, "success": True, "error": None})
+                    else:
+                        err = conn.result.get("description", "Modify failed")
+                        logger.warning("Offboard [%s]: ad → failed (%s)", display_name, err)
+                        results.append({"service": "ad", "attempted": True, "success": False, "error": err})
+                conn.unbind()
+        except Exception as exc:
+            logger.warning("Offboard [%s]: ad → exception: %s", display_name, exc)
+            results.append({"service": "ad", "attempted": True, "success": False, "error": str(exc)})
+    else:
+        results.append({"service": "ad", "attempted": False, "success": False, "error": None})
+
+    return {
+        "device_id": item.get("device_id", ""),
+        "display_name": display_name if display_name != "unknown" else None,
+        "results": results,
+    }
 
 
 def assign_user_licenses(

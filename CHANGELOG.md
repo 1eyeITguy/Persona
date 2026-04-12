@@ -8,6 +8,13 @@ Versioning: [Semantic Versioning](https://semver.org/)
 ## [Unreleased] — Phase 3: Exchange Online View
 
 ### Added
+- **Device ownership tagging** — device cards in the user slideout now show Corporate / Personal / Unknown badges derived from `managedDeviceOwnerType` (Intune) and `trustType` (Entra-only devices)
+- **Service presence indicators** — corporate device cards show lit/struck-through badges for Entra ID, Intune, and Autopilot enrollment status; Autopilot is detected via the `[ZTDID]` marker in `physicalIds`
+- **Device offboarding flow** — corporate devices can be selected (checkbox) and offboarded via a confirmation modal with per-service checkboxes (Intune, Autopilot, Entra ID, AD computer disable); results shown per-service with success/failure indicators
+- **`POST /api/v1/entra/devices/offboard`** — new endpoint processing Intune → Autopilot → Entra → AD in strict order; each step is independent (partial failure does not abort remaining steps); audit logged via `logger.info`
+- **`DeviceOffboardModal`** — new frontend component handling confirm → progress → results phases; pre-selects applicable services based on device enrollment status
+- **`EntraDevice` schema expansion** — added `intune_device_id`, `entra_device_id`, `ownership`, `in_intune`, `in_entra`, `in_autopilot` fields; corrected ID tracking by linking via `azureADDeviceId`
+- **New offboard schemas** — `DeviceOffboardRequest`, `DeviceOffboardItem`, `DeviceOffboardResult`, `DeviceOffboardItemResult`, `DeviceServiceResult`
 - **Exchange tab** in the user detail panel — visible for all AD users; content adapts to the resolved Source of Authority (SOA)
 - **Exchange SOA resolver** (`backend/services/exchange_soa.py`) — three-layer detection algorithm:
   - Layer 1: Per-mailbox declaration from Graph API

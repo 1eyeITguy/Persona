@@ -4,6 +4,7 @@ import axios from 'axios'
 import { useAuth } from '../context/AuthContext.jsx'
 import { getInitials, formatDate } from '../utils.js'
 import { EntraDeviceCard, CloudGroupsList, LicenseCardList } from './UserDetail.jsx'
+import DeviceOffboardModal from './DeviceOffboardModal.jsx'
 
 // ---------------------------------------------------------------------------
 // Shared helpers (local to this component)
@@ -118,6 +119,8 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
   const [devices, setDevices] = useState(null)
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [devicesError, setDevicesError] = useState(null)
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState(new Set())
+  const [offboardOpen, setOffboardOpen] = useState(false)
 
   useEffect(() => {
     if (!selectedUser?.upn) return
@@ -178,10 +181,12 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
       .finally(() => setDevicesLoading(false))
   }, [activeTab, data, selectedUser, devices]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset devices when user changes
+  // Reset devices and selection when user changes
   useEffect(() => {
     setDevices(null)
     setDevicesError(null)
+    setSelectedDeviceIds(new Set())
+    setOffboardOpen(false)
   }, [selectedUser?.upn])
 
   if (!selectedUser) return null
@@ -313,9 +318,48 @@ export default function EntraUserDetailPanel({ user: selectedUser, onClose }) {
           )
         }
         return (
-          <ul className="space-y-2">
-            {devices.map(d => <EntraDeviceCard key={d.device_id} device={d} />)}
-          </ul>
+          <div className="space-y-3">
+            {selectedDeviceIds.size > 0 && (
+              <div className="flex items-center justify-between rounded-md border border-danger/30 bg-danger/5 px-3 py-2">
+                <span className="text-xs text-slate-400">
+                  {selectedDeviceIds.size} device{selectedDeviceIds.size !== 1 ? 's' : ''} selected
+                </span>
+                <button
+                  onClick={() => setOffboardOpen(true)}
+                  className="flex items-center gap-1.5 rounded-md bg-danger px-3 py-1.5 text-xs font-medium text-white hover:bg-danger/80 transition-colors"
+                >
+                  Offboard {selectedDeviceIds.size > 1 ? `${selectedDeviceIds.size} Devices` : 'Device'}
+                </button>
+              </div>
+            )}
+            <ul className="space-y-2">
+              {devices.map(d => (
+                <EntraDeviceCard
+                  key={d.device_id}
+                  device={d}
+                  selectable
+                  selected={selectedDeviceIds.has(d.device_id)}
+                  onToggle={(id) => setSelectedDeviceIds(prev => {
+                    const next = new Set(prev)
+                    next.has(id) ? next.delete(id) : next.add(id)
+                    return next
+                  })}
+                />
+              ))}
+            </ul>
+            {offboardOpen && selectedDeviceIds.size > 0 && (
+              <DeviceOffboardModal
+                devices={devices.filter(d => selectedDeviceIds.has(d.device_id))}
+                getToken={getToken}
+                onClose={() => setOffboardOpen(false)}
+                onComplete={() => {
+                  setOffboardOpen(false)
+                  setSelectedDeviceIds(new Set())
+                  setDevices(null)  // force re-fetch on next tab open
+                }}
+              />
+            )}
+          </div>
         )
 
       default: return null
