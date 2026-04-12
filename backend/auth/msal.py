@@ -704,12 +704,21 @@ def get_entra_user_devices(
 
     devices: dict[str, dict] = {}  # intune_device_id → dict
 
+    # Sentinel: azureADDeviceId is this string when the device isn't Entra-joined
+    _ZERO_GUID = "00000000-0000-0000-0000-000000000000"
+
     # ── 1. Intune managed devices ──────────────────────────────────────────────
     intune_select = (
         "id,deviceName,operatingSystem,osVersion,model,manufacturer,"
         "complianceState,managementState,enrolledDateTime,lastSyncDateTime,"
         "managedDeviceOwnerType,azureADDeviceId"
     )
+    # Separate lookup: azureADDeviceId → intune key.
+    # NOTE: managedDevice.azureADDeviceId == device.deviceId on the Entra side,
+    # which is a DIFFERENT field from device.id (the Object ID).
+    # We use this map to match records during the Entra registered-devices pass.
+    azure_ad_device_id_to_intune_key: dict[str, str] = {}
+
     try:
         resp = _requests.get(
             f"{_GRAPH_BASE}/users/{object_id}/managedDevices",
@@ -726,11 +735,18 @@ def get_entra_user_devices(
                     else "personal" if raw_owner == "personal"
                     else None
                 )
-                azure_ad_id = d.get("azureADDeviceId") or None
+                # azureADDeviceId corresponds to device.deviceId on the Entra side
+                # (NOT device.id). Filter out zero GUIDs (not Entra-joined).
+                raw_azure_id = d.get("azureADDeviceId") or ""
+                azure_ad_id = raw_azure_id if (raw_azure_id and raw_azure_id != _ZERO_GUID) else None
+
+                if azure_ad_id:
+                    azure_ad_device_id_to_intune_key[azure_ad_id] = device_id
+
                 devices[device_id] = {
                     "device_id": device_id,
                     "intune_device_id": device_id,
-                    "entra_device_id": azure_ad_id,
+                    "entra_device_id": None,    # set during Entra pass (needs Entra object ID)
                     "display_name": d.get("deviceName"),
                     "device_type": "intune",
                     "operating_system": d.get("operatingSystem"),
@@ -745,8 +761,8 @@ def get_entra_user_devices(
                     "trust_type": None,
                     "ownership": ownership,
                     "in_intune": True,
-                    "in_entra": azure_ad_id is not None,
-                    "in_autopilot": False,  # refined during Entra pass
+                    "in_entra": azure_ad_id is not None,  # confirmed during Entra pass
+                    "in_autopilot": False,                 # refined during Entra pass
                 }
         elif resp.status_code == 403:
             logger.debug(
@@ -756,17 +772,12 @@ def get_entra_user_devices(
     except Exception as exc:
         logger.debug("Intune devices fetch error for %s: %s", object_id, exc)
 
-    # Build a reverse map: entra_device_id → intune_device_id key
-    # Used to merge physicalIds (Autopilot marker) from the Entra pass.
-    entra_id_to_intune_key: dict[str, str] = {
-        v["entra_device_id"]: k
-        for k, v in devices.items()
-        if v.get("entra_device_id")
-    }
-
     # ── 2. Entra registered / joined devices ───────────────────────────────────
+    # We fetch deviceId (= azureADDeviceId on Intune side) for dedup matching,
+    # and physicalIds to detect Autopilot ([ZTDID] tag).
+    # device.id is the Entra Object ID, used for DELETE /devices/{id}.
     entra_select = (
-        "id,displayName,operatingSystem,operatingSystemVersion,model,manufacturer,"
+        "id,deviceId,displayName,operatingSystem,operatingSystemVersion,model,manufacturer,"
         "trustType,approximateLastSignInDateTime,physicalIds"
     )
     try:
@@ -778,19 +789,22 @@ def get_entra_user_devices(
         )
         if resp.ok:
             for d in resp.json().get("value", []):
-                device_id = d.get("id", "")
+                entra_object_id = d.get("id", "")          # Object ID → used for DELETE /devices/{id}
+                entra_device_id = d.get("deviceId") or ""  # device.deviceId → matches azureADDeviceId
                 physical_ids = d.get("physicalIds") or []
                 in_autopilot = any(p.startswith("[ZTDID]") for p in physical_ids)
 
-                intune_key = entra_id_to_intune_key.get(device_id)
+                # Check if this Entra device corresponds to an Intune-managed device
+                intune_key = azure_ad_device_id_to_intune_key.get(entra_device_id)
                 if intune_key:
-                    # Merge Autopilot status into the existing Intune record
+                    # Merge Entra-side data into the existing Intune record
+                    devices[intune_key]["entra_device_id"] = entra_object_id  # now we have the real Object ID
                     devices[intune_key]["in_entra"] = True
                     devices[intune_key]["in_autopilot"] = in_autopilot
                     continue
 
-                if device_id in devices:
-                    continue  # already keyed by Entra ID (edge case)
+                if entra_object_id in devices:
+                    continue  # edge case: already keyed by this Entra Object ID
 
                 # Entra-only device — infer ownership from trustType
                 trust = d.get("trustType")
@@ -801,10 +815,10 @@ def get_entra_user_devices(
                 else:
                     ownership = None
 
-                devices[device_id] = {
-                    "device_id": device_id,
+                devices[entra_object_id] = {
+                    "device_id": entra_object_id,
                     "intune_device_id": None,
-                    "entra_device_id": device_id,
+                    "entra_device_id": entra_object_id,
                     "display_name": d.get("displayName"),
                     "device_type": "entra",
                     "operating_system": d.get("operatingSystem"),
