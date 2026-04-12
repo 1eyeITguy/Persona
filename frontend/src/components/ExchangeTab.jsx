@@ -63,118 +63,155 @@ function formatBytes(bytes) {
 }
 
 // ---------------------------------------------------------------------------
-// State: CLOUD
+// State: CLOUD — tabbed layout
 // ---------------------------------------------------------------------------
 
+const INNER_TABS = [
+  { id: 'email',  label: 'Email Addresses' },
+  { id: 'groups', label: 'Distribution Groups' },
+  { id: 'shared', label: 'Shared Access' },
+]
+
 function CloudMailboxView({ data, sizeBytes, sizeLoading, shared, sharedLoading, onLoadShared }) {
+  const [innerTab, setInnerTab] = useState('email')
+
+  function handleTab(id) {
+    setInnerTab(id)
+    // Auto-trigger load the first time the Shared tab is selected
+    if (id === 'shared' && shared === null && !sharedLoading) {
+      onLoadShared()
+    }
+  }
+
+  const emailCount = data.proxy_addresses?.length ?? 0
+  const groupCount = data.distribution_groups?.length ?? 0
+
   return (
     <div>
+      {/* Summary fields — always visible */}
       <SectionHeading>Exchange Online</SectionHeading>
       <dl>
         <Field label="Primary email"  value={data.primary_email} />
         <Field label="Display name"   value={data.display_name} />
         <Field
           label="Mailbox size"
-          value={
-            sizeLoading  ? 'Loading...' :
-            sizeBytes    ? formatBytes(sizeBytes) :
-            null
-          }
+          value={sizeLoading ? 'Loading...' : sizeBytes ? formatBytes(sizeBytes) : null}
         />
         <Field
           label="Archive"
-          value={
-            data.archive_enabled === true  ? 'Enabled' :
-            data.archive_enabled === false ? 'Disabled' :
-            null
-          }
+          value={data.archive_enabled === true ? 'Enabled' : data.archive_enabled === false ? 'Disabled' : null}
         />
         <Field
           label="Out of office"
-          value={
-            data.ooo_enabled === true  ? 'On' :
-            data.ooo_enabled === false ? 'Off' :
-            null
-          }
+          value={data.ooo_enabled === true ? 'On' : data.ooo_enabled === false ? 'Off' : null}
         />
       </dl>
 
-      {/* Email addresses */}
-      {data.proxy_addresses?.length > 0 && (
-        <>
-          <SectionHeading>Email Addresses</SectionHeading>
-          <ul className="space-y-1">
-            {data.proxy_addresses.map((addr, i) => (
-              <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
-                <Mail className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                <span className="flex-1 font-mono text-xs text-slate-300">{addr.address}</span>
-                <span className={`text-xs font-medium ${addr.is_primary ? 'text-brand-primary' : 'text-slate-500'}`}>
-                  {addr.is_primary ? 'Primary' : addr.protocol?.toLowerCase() === 'smtp' ? 'Alias' : addr.protocol}
+      {/* Mini tab bar */}
+      <div className="mt-5 flex border-b border-border-subtle">
+        {INNER_TABS.map(tab => {
+          const count = tab.id === 'email' ? emailCount : tab.id === 'groups' ? groupCount : null
+          const active = innerTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => handleTab(tab.id)}
+              className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2 text-xs font-medium whitespace-nowrap transition-colors ${
+                active
+                  ? 'border-brand-primary text-brand-primary'
+                  : 'border-transparent text-slate-400 hover:border-slate-600 hover:text-slate-200'
+              }`}
+            >
+              {tab.label}
+              {count !== null && count > 0 && (
+                <span className={`rounded-full px-1.5 py-0.5 text-xs leading-none ${
+                  active ? 'bg-brand-primary/20 text-brand-primary' : 'bg-slate-700 text-slate-400'
+                }`}>
+                  {count}
                 </span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+              )}
+              {/* Spinner on shared tab while loading */}
+              {tab.id === 'shared' && sharedLoading && (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              )}
+            </button>
+          )
+        })}
+      </div>
 
-      {/* Distribution group membership */}
-      {data.distribution_groups?.length > 0 && (
-        <>
-          <SectionHeading>Distribution Groups</SectionHeading>
-          <ul className="space-y-1">
-            {data.distribution_groups.map((g, i) => (
-              <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
-                <Users className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                <span className="flex-1 text-sm text-slate-300">{g.name}</span>
-                {g.mail && <span className="font-mono text-xs text-slate-500">{g.mail}</span>}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      {/* Tab content */}
+      <div className="mt-3">
 
-      {/* Shared mailbox access */}
-      <SectionHeading>Shared Mailbox Access</SectionHeading>
-      {shared === null && !sharedLoading && (
-        <button
-          onClick={onLoadShared}
-          className="flex items-center gap-1.5 rounded-md border border-border-subtle px-3 py-1.5 text-xs text-slate-400 hover:border-brand-primary/50 hover:text-slate-200 transition-colors"
-        >
-          <Share2 className="h-3.5 w-3.5" />
-          Load shared mailbox access
-        </button>
-      )}
-      {sharedLoading && (
-        <p className="flex items-center gap-1.5 text-xs text-slate-500">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          Loading… this may take a minute
-        </p>
-      )}
-      {shared !== null && !sharedLoading && shared.length === 0 && (
-        <p className="text-xs text-slate-600">No shared mailbox access found.</p>
-      )}
-      {shared !== null && shared.length > 0 && (
-        <ul className="space-y-1">
-          {shared.map((s, i) => (
-            <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
-              <Share2 className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-              <div className="flex-1">
-                <span className="text-sm text-slate-300">{s.display_name}</span>
-                {s.email && s.email !== s.display_name && (
-                  <span className="ml-2 font-mono text-xs text-slate-500">{s.email}</span>
-                )}
-              </div>
-              <span className={`text-xs font-medium rounded-full border px-2 py-0.5 ${
-                s.access_type === 'FullAccess'
-                  ? 'border-brand-primary/30 bg-brand-primary/10 text-brand-primary'
-                  : 'border-slate-500/30 bg-slate-500/10 text-slate-400'
-              }`}>
-                {s.access_type}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+        {innerTab === 'email' && (
+          emailCount > 0 ? (
+            <ul className="space-y-1">
+              {data.proxy_addresses.map((addr, i) => (
+                <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
+                  <Mail className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                  <span className="flex-1 font-mono text-xs text-slate-300">{addr.address}</span>
+                  <span className={`text-xs font-medium ${addr.is_primary ? 'text-brand-primary' : 'text-slate-500'}`}>
+                    {addr.is_primary ? 'Primary' : addr.protocol?.toLowerCase() === 'smtp' ? 'Alias' : addr.protocol}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-slate-500">No email addresses found.</p>
+          )
+        )}
+
+        {innerTab === 'groups' && (
+          groupCount > 0 ? (
+            <ul className="space-y-1">
+              {data.distribution_groups.map((g, i) => (
+                <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
+                  <Users className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                  <span className="flex-1 text-sm text-slate-300">{g.name}</span>
+                  {g.mail && <span className="font-mono text-xs text-slate-500">{g.mail}</span>}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-slate-500">No distribution group membership.</p>
+          )
+        )}
+
+        {innerTab === 'shared' && (
+          sharedLoading ? (
+            <p className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading… this may take a minute
+            </p>
+          ) : shared === null ? (
+            // Shouldn't be visible — load triggers on tab click — but just in case
+            <p className="text-xs text-slate-600">Initializing…</p>
+          ) : shared.length === 0 ? (
+            <p className="text-sm text-slate-500">No shared mailbox access found.</p>
+          ) : (
+            <ul className="space-y-1">
+              {shared.map((s, i) => (
+                <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
+                  <Share2 className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                  <div className="flex-1">
+                    <span className="text-sm text-slate-300">{s.display_name}</span>
+                    {s.email && s.email !== s.display_name && (
+                      <span className="ml-2 font-mono text-xs text-slate-500">{s.email}</span>
+                    )}
+                  </div>
+                  <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
+                    s.access_type === 'FullAccess'
+                      ? 'border-brand-primary/30 bg-brand-primary/10 text-brand-primary'
+                      : 'border-slate-500/30 bg-slate-500/10 text-slate-400'
+                  }`}>
+                    {s.access_type}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
+        )}
+
+      </div>
     </div>
   )
 }

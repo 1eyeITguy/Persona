@@ -220,9 +220,10 @@ try {{
     }}
 
     # FullAccess — must enumerate all shared mailboxes
-    $mailboxes = Get-EXOMailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited -ErrorAction SilentlyContinue
+    # Uses Get-Mailbox + Get-MailboxPermission (classic cmdlets, confirmed working)
+    $mailboxes = Get-Mailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited -ErrorAction SilentlyContinue
     foreach ($mb in $mailboxes) {{
-        $perms = Get-EXOMailboxPermission -Identity $mb.PrimarySmtpAddress -User '{safe_upn}' -ErrorAction SilentlyContinue
+        $perms = Get-MailboxPermission -Identity $mb.Identity -User '{safe_upn}' -ErrorAction SilentlyContinue
         foreach ($p in $perms) {{
             if ($p.AccessRights -contains 'FullAccess') {{
                 $results += [PSCustomObject]@{{
