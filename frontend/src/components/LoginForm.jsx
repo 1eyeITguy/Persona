@@ -1,10 +1,71 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { Shield, Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext.jsx'
 
 /* global __APP_VERSION__ */
+
+const CHARS = '01アイウエオカキクケコ23456789ABCDEF#$%'
+
+function MatrixRain() {
+  const canvasRef = useRef(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    const fontSize = 13
+    let drops = []
+
+    function init() {
+      canvas.width = window.innerWidth
+      canvas.height = window.innerHeight
+      const cols = Math.floor(canvas.width / fontSize)
+      drops = Array.from({ length: cols }, () => Math.random() * -(canvas.height / fontSize))
+    }
+
+    init()
+    window.addEventListener('resize', init)
+
+    function draw() {
+      // Slow fade — creates the trailing glow effect
+      ctx.fillStyle = 'rgba(15, 17, 23, 0.055)'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+      ctx.font = `${fontSize}px monospace`
+
+      for (let i = 0; i < drops.length; i++) {
+        const char = CHARS[Math.floor(Math.random() * CHARS.length)]
+        const x = i * fontSize
+        const y = drops[i] * fontSize
+
+        // Head of the stream — brighter accent purple
+        ctx.fillStyle = 'rgba(124, 58, 237, 0.75)'
+        ctx.fillText(char, x, y)
+
+        // Advance drop; reset randomly at bottom
+        drops[i] += 0.4
+        if (y > canvas.height && Math.random() > 0.978) {
+          drops[i] = 0
+        }
+      }
+    }
+
+    const id = setInterval(draw, 55)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener('resize', init)
+    }
+  }, [])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="absolute inset-0 pointer-events-none"
+      style={{ opacity: 0.45 }}
+    />
+  )
+}
 
 function Logo() {
   return (
@@ -52,8 +113,9 @@ export default function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-app-bg px-4">
-      <div className="w-full max-w-sm">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-app-bg px-4">
+      <MatrixRain />
+      <div className="relative z-10 w-full max-w-sm">
         <Logo />
 
         <div className="rounded-xl border border-border-subtle bg-surface p-8 shadow-2xl">
