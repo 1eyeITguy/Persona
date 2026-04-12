@@ -669,31 +669,29 @@ def get_entra_user_devices(
     object_id: str,
 ) -> list[dict]:
     """
-    Fetch and merge device records for an Entra user from three sources.
+    Fetch and merge device records for an Entra user.
 
-    DESIGN: Entra-first.  /users/{id}/managedDevices only returns devices where
-    the user is the Intune *primary user*, which is often unset or differs from
-    the Entra registered owner.  /users/{id}/registeredDevices is scoped to the
-    registered owner, which is always set for the user who enrolled/joined the
-    device, so it is the reliable starting point.
+    DESIGN: Intune-first, then merge Entra data in.
 
-    Pass 1  GET /users/{id}/registeredDevices          [Device.Read.All]
-      → All Entra device objects for this user.
-      → device.id        = Entra Object ID  (used for DELETE /devices/{id})
-      → device.deviceId  = hardware reg ID  (== managedDevice.azureADDeviceId)
-      → physicalIds      = [ZTDID] tag means enrolled in Autopilot
-      → deviceOwnership  = "company" / "personal" (set by Intune)
+    Windows devices have azureADDeviceId populated in Intune, so ID-matching
+    works.  iOS/macOS enrolled via Apple ADE/ABM typically have azureADDeviceId
+    = null or zero-GUID in Intune — they rely on name matching instead.
 
-    Pass 2  GET /deviceManagement/managedDevices        [DeviceManagementManagedDevices.Read.All]
-            ?$filter=azureADDeviceId eq 'X' or azureADDeviceId eq 'Y'
-      → Global Intune lookup — NOT scoped to primary user.
-      → Matches to Entra devices by azureADDeviceId == device.deviceId.
-      → Gives ownership from managedDeviceOwnerType, serial, compliance, etc.
-      → Name-based fallback for iOS/iPadOS where azureADDeviceId may be null.
+    Pass 1  GET /users/{id}/managedDevices          [DeviceManagementManagedDevices.Read.All]
+      → All Intune-managed devices for this user (keyed on Intune primary user).
+      → Gives us: Intune device ID, ownership (managedDeviceOwnerType), serial,
+        compliance, and azureADDeviceId.
+      → Every device returned here gets in_intune=True and correct ownership.
 
-    Pass 3  GET /users/{id}/managedDevices              [DeviceManagementManagedDevices.Read.All]
-      → Catches any Intune devices where the user IS the primary user but the
-        device is NOT in registeredDevices (e.g. headless/shared devices).
+    Pass 2  GET /users/{id}/registeredDevices       [Device.Read.All]
+      → All Entra device objects registered to this user.
+      → For each, try to find the matching Intune record:
+          a) ID match:   device.deviceId == managedDevice.azureADDeviceId
+          b) Name match: device.displayName.lower() == managedDevice.deviceName.lower()
+      → Matched: merge in entra_device_id + physicalIds (Autopilot flag).
+      → Unmatched: query Intune globally by azureADDeviceId to handle devices
+        where the user is NOT the Intune primary user (e.g. shared machines).
+      → Still unmatched: add as Entra-only record.
 
     Returns a list of dicts matching the EntraDevice schema.
     Caller MUST use run_in_threadpool.
@@ -719,28 +717,95 @@ def get_entra_user_devices(
 
     _ZERO_GUID = "00000000-0000-0000-0000-000000000000"
 
-    # Output dict.  Key = Entra Object ID (preferred) or Intune device ID.
-    devices: dict[str, dict] = {}
+    # ── Pass 1: Intune managed devices (user-scoped) ──────────────────────────
+    # Keyed by Intune device ID.  Every device here gets in_intune=True and
+    # correct ownership from managedDeviceOwnerType — including Apple devices
+    # that lack azureADDeviceId (ADE/ABM-enrolled iOS/macOS).
+    intune_select = (
+        "id,deviceName,operatingSystem,osVersion,model,manufacturer,"
+        "complianceState,managementState,enrolledDateTime,lastSyncDateTime,"
+        "managedDeviceOwnerType,serialNumber,azureADDeviceId"
+    )
 
-    # ── Pass 1: Entra registered devices ──────────────────────────────────────
-    # registeredDevices is scoped to the registered *owner*, which is reliably
-    # set for every user who joined or enrolled the device — regardless of what
-    # Intune has set as the "primary user".
-    #
-    # device.id        = Entra Object ID     → used for DELETE /devices/{id}
-    # device.deviceId  = hardware reg ID     → equals managedDevice.azureADDeviceId
-    # physicalIds      = [ZTDID] → Autopilot; [OrderID] → group tag
-    # deviceOwnership  = "company"/"personal" set by Intune on the Entra object
+    # Output: keyed by Intune device ID.
+    devices: dict[str, dict] = {}
+    # For name-based Entra→Intune lookup in Pass 2.
+    intune_by_name:    dict[str, str] = {}   # deviceName.lower() → intune_id
+    # For ID-based Entra→Intune lookup in Pass 2.
+    intune_by_azure_id: dict[str, str] = {}  # azureADDeviceId → intune_id
+
+    # ── Pass 1: Intune managed devices (user-scoped) ──────────────────────────
+    # /users/{id}/managedDevices returns all devices where this user is the
+    # Intune primary user — including iOS/macOS enrolled via Apple ADE/ABM.
+    # Every device here gets in_intune=True and ownership from Intune.
+    try:
+        resp = _requests.get(
+            f"{_GRAPH_BASE}/users/{object_id}/managedDevices",
+            headers=headers,
+            params={"$select": intune_select, "$top": 100},
+            timeout=10,
+        )
+        if resp.ok:
+            for d in resp.json().get("value", []):
+                intune_id   = d.get("id", "")
+                device_name = d.get("deviceName") or ""
+                azure_ad_id = d.get("azureADDeviceId") or ""
+                raw_owner   = d.get("managedDeviceOwnerType", "")
+                ownership   = (
+                    "corporate" if raw_owner == "company"
+                    else "personal" if raw_owner == "personal"
+                    else None
+                )
+                if not intune_id:
+                    continue
+
+                if device_name:
+                    intune_by_name[device_name.lower()] = intune_id
+                if azure_ad_id and azure_ad_id != _ZERO_GUID:
+                    intune_by_azure_id[azure_ad_id] = intune_id
+
+                devices[intune_id] = {
+                    "device_id":        intune_id,
+                    "intune_device_id": intune_id,
+                    "entra_device_id":  None,       # filled in Pass 2
+                    "serial_number":    d.get("serialNumber") or None,
+                    "display_name":     device_name or None,
+                    "device_type":      "intune",
+                    "operating_system": d.get("operatingSystem"),
+                    "os_version":       d.get("osVersion"),
+                    "model":            d.get("model"),
+                    "manufacturer":     d.get("manufacturer"),
+                    "compliance_state": d.get("complianceState"),
+                    "management_state": d.get("managementState"),
+                    "enrolled_date_time":  d.get("enrolledDateTime"),
+                    "last_sync_date_time": d.get("lastSyncDateTime"),
+                    "is_managed":  True,
+                    "trust_type":  None,
+                    "ownership":   ownership,
+                    "in_intune":   True,
+                    "in_entra":    False,   # updated in Pass 2
+                    "in_autopilot": False,  # updated in Pass 2
+                }
+        elif resp.status_code == 403:
+            logger.debug("DeviceManagementManagedDevices.Read.All not granted for %s", object_id)
+    except Exception as exc:
+        logger.debug("managedDevices fetch error for %s: %s", object_id, exc)
+
+    # ── Pass 2: Entra registered devices — merge into Intune records ──────────
+    # For each Entra device:
+    #   a) ID match:   device.deviceId  == managedDevice.azureADDeviceId  (Windows)
+    #   b) Name match: device.displayName == managedDevice.deviceName      (iOS/macOS)
+    # If matched: update the Intune record with entra_device_id + Autopilot flag.
+    # If not matched: global Intune lookup by azureADDeviceId (handles devices
+    #   where the user is NOT the primary user, e.g. shared machines).
+    # Still unmatched: add as Entra-only.
     entra_reg_select = (
         "id,deviceId,displayName,operatingSystem,operatingSystemVersion,"
         "model,manufacturer,trustType,approximateLastSignInDateTime,"
         "physicalIds,deviceOwnership"
     )
-
-    # Keyed by device.deviceId (hardware ID) → Entra record dict
-    entra_by_hw_id:   dict[str, dict] = {}
-    # Keyed by displayName.lower() → Entra record dict  (fallback for iOS)
-    entra_by_name:    dict[str, dict] = {}
+    # Track Entra Object IDs that were merged into existing Intune records
+    merged_entra_obj_ids: set[str] = set()
 
     try:
         resp = _requests.get(
@@ -754,280 +819,126 @@ def get_entra_user_devices(
                 entra_obj_id = d.get("id", "")
                 hw_id        = d.get("deviceId") or ""
                 name         = d.get("displayName") or ""
+                physical_ids = d.get("physicalIds") or []
+                in_autopilot = any(p.startswith("[ZTDID]") for p in physical_ids)
                 if not entra_obj_id:
                     continue
-                rec = {
-                    "entra_obj_id":    entra_obj_id,
-                    "hw_id":           hw_id,
-                    "display_name":    name or None,
-                    "operating_system":      d.get("operatingSystem"),
-                    "os_version":            d.get("operatingSystemVersion"),
-                    "model":                 d.get("model"),
-                    "manufacturer":          d.get("manufacturer"),
-                    "trust_type":            d.get("trustType"),
-                    "last_sync_date_time":   d.get("approximateLastSignInDateTime"),
-                    "device_ownership":      d.get("deviceOwnership") or "",
-                    "physical_ids":          d.get("physicalIds") or [],
-                }
+
+                # a) ID match via azureADDeviceId ↔ device.deviceId
+                intune_key = None
                 if hw_id and hw_id != _ZERO_GUID:
-                    entra_by_hw_id[hw_id] = rec
-                if name:
-                    entra_by_name[name.lower()] = rec
+                    intune_key = intune_by_azure_id.get(hw_id)
+
+                # b) Name match fallback (iOS/macOS where azureADDeviceId may be null)
+                if intune_key is None and name:
+                    intune_key = intune_by_name.get(name.lower())
+
+                if intune_key and intune_key in devices:
+                    # Merge Entra data into the existing Intune record
+                    devices[intune_key]["entra_device_id"] = entra_obj_id
+                    devices[intune_key]["in_entra"]        = True
+                    devices[intune_key]["in_autopilot"]    = in_autopilot
+                    # Prefer Intune OS data; only fill in if missing
+                    if not devices[intune_key]["trust_type"]:
+                        devices[intune_key]["trust_type"] = d.get("trustType")
+                    merged_entra_obj_ids.add(entra_obj_id)
+                    continue
+
+                # c) No match in user's Intune — try global Intune lookup by azureADDeviceId.
+                #    Handles devices where the user is not the Intune primary user.
+                if hw_id and hw_id != _ZERO_GUID:
+                    try:
+                        gr = _requests.get(
+                            f"{_GRAPH_BASE}/deviceManagement/managedDevices",
+                            headers=headers,
+                            params={
+                                "$filter": f"azureADDeviceId eq '{hw_id}'",
+                                "$select": intune_select,
+                                "$top": 1,
+                            },
+                            timeout=10,
+                        )
+                        if gr.ok:
+                            vals = gr.json().get("value", [])
+                            if vals:
+                                gd        = vals[0]
+                                intune_id = gd.get("id", "")
+                                if intune_id and intune_id not in devices:
+                                    raw_owner = gd.get("managedDeviceOwnerType", "")
+                                    ownership = (
+                                        "corporate" if raw_owner == "company"
+                                        else "personal" if raw_owner == "personal"
+                                        else None
+                                    )
+                                    devices[intune_id] = {
+                                        "device_id":        intune_id,
+                                        "intune_device_id": intune_id,
+                                        "entra_device_id":  entra_obj_id,
+                                        "serial_number":    gd.get("serialNumber") or None,
+                                        "display_name":     gd.get("deviceName") or name or None,
+                                        "device_type":      "intune",
+                                        "operating_system": gd.get("operatingSystem"),
+                                        "os_version":       gd.get("osVersion"),
+                                        "model":            gd.get("model"),
+                                        "manufacturer":     gd.get("manufacturer"),
+                                        "compliance_state": gd.get("complianceState"),
+                                        "management_state": gd.get("managementState"),
+                                        "enrolled_date_time":  gd.get("enrolledDateTime"),
+                                        "last_sync_date_time": gd.get("lastSyncDateTime"),
+                                        "is_managed":  True,
+                                        "trust_type":  d.get("trustType"),
+                                        "ownership":   ownership,
+                                        "in_intune":   True,
+                                        "in_entra":    True,
+                                        "in_autopilot": in_autopilot,
+                                    }
+                                    merged_entra_obj_ids.add(entra_obj_id)
+                                    continue
+                    except Exception as exc:
+                        logger.debug("Global Intune lookup error for hw_id %s: %s", hw_id, exc)
+
+                # d) Truly Entra-only device — not managed by Intune at all
+                if entra_obj_id in merged_entra_obj_ids:
+                    continue
+                trust = d.get("trustType")
+                devo  = d.get("deviceOwnership") or ""
+                if devo == "company":
+                    ownership = "corporate"
+                elif devo == "personal":
+                    ownership = "personal"
+                elif trust in ("AzureAd", "ServerAd"):
+                    ownership = "corporate"
+                elif trust == "Workplace":
+                    ownership = "personal"
+                else:
+                    ownership = None
+
+                devices[entra_obj_id] = {
+                    "device_id":        entra_obj_id,
+                    "intune_device_id": None,
+                    "entra_device_id":  entra_obj_id,
+                    "serial_number":    None,
+                    "display_name":     name or None,
+                    "device_type":      "entra",
+                    "operating_system": d.get("operatingSystem"),
+                    "os_version":       d.get("operatingSystemVersion"),
+                    "model":            d.get("model"),
+                    "manufacturer":     d.get("manufacturer"),
+                    "compliance_state": None,
+                    "management_state": None,
+                    "enrolled_date_time":  None,
+                    "last_sync_date_time": d.get("approximateLastSignInDateTime"),
+                    "is_managed":  False,
+                    "trust_type":  trust,
+                    "ownership":   ownership,
+                    "in_intune":   False,
+                    "in_entra":    True,
+                    "in_autopilot": in_autopilot,
+                }
         elif resp.status_code == 403:
             logger.debug("Device.Read.All not granted — registeredDevices skipped for %s", object_id)
     except Exception as exc:
         logger.debug("registeredDevices fetch error for %s: %s", object_id, exc)
-
-    # ── Pass 2: Global Intune lookup by azureADDeviceId ────────────────────────
-    # Query Intune for ALL managed devices whose azureADDeviceId matches a
-    # hardware ID we got from registeredDevices.  This is NOT user-scoped, so
-    # it works even when the Intune "primary user" differs from the Entra owner.
-    #
-    # azureADDeviceId is filterable with $filter=azureADDeviceId eq '...' per docs.
-    # We batch them all in one request using "or".
-    intune_select = (
-        "id,deviceName,operatingSystem,osVersion,model,manufacturer,"
-        "complianceState,managementState,enrolledDateTime,lastSyncDateTime,"
-        "managedDeviceOwnerType,serialNumber,azureADDeviceId"
-    )
-
-    # Track which hardware IDs were successfully matched to Intune
-    matched_hw_ids: set[str] = set()
-
-    if entra_by_hw_id:
-        filter_str = " or ".join(
-            f"azureADDeviceId eq '{hw_id}'" for hw_id in entra_by_hw_id
-        )
-        try:
-            resp = _requests.get(
-                f"{_GRAPH_BASE}/deviceManagement/managedDevices",
-                headers=headers,
-                params={"$filter": filter_str, "$select": intune_select, "$top": 100},
-                timeout=15,
-            )
-            if resp.ok:
-                for d in resp.json().get("value", []):
-                    intune_id  = d.get("id", "")
-                    hw_id      = d.get("azureADDeviceId") or ""
-                    entra_rec  = entra_by_hw_id.get(hw_id)
-                    if not intune_id or not entra_rec:
-                        continue
-
-                    matched_hw_ids.add(hw_id)
-                    entra_obj_id = entra_rec["entra_obj_id"]
-                    physical_ids = entra_rec["physical_ids"]
-                    in_autopilot = any(p.startswith("[ZTDID]") for p in physical_ids)
-
-                    raw_owner = d.get("managedDeviceOwnerType", "")
-                    ownership = (
-                        "corporate" if raw_owner == "company"
-                        else "personal" if raw_owner == "personal"
-                        else None
-                    )
-
-                    devices[entra_obj_id] = {
-                        "device_id":        entra_obj_id,
-                        "intune_device_id": intune_id,
-                        "entra_device_id":  entra_obj_id,
-                        "serial_number":    d.get("serialNumber") or None,
-                        "display_name":     d.get("deviceName") or entra_rec["display_name"],
-                        "device_type":      "intune",
-                        "operating_system": d.get("operatingSystem"),
-                        "os_version":       d.get("osVersion"),
-                        "model":            d.get("model"),
-                        "manufacturer":     d.get("manufacturer"),
-                        "compliance_state": d.get("complianceState"),
-                        "management_state": d.get("managementState"),
-                        "enrolled_date_time":  d.get("enrolledDateTime"),
-                        "last_sync_date_time": d.get("lastSyncDateTime"),
-                        "is_managed":  True,
-                        "trust_type":  entra_rec["trust_type"],
-                        "ownership":   ownership,
-                        "in_intune":   True,
-                        "in_entra":    True,
-                        "in_autopilot": in_autopilot,
-                    }
-            elif resp.status_code == 403:
-                logger.debug(
-                    "DeviceManagementManagedDevices.Read.All not granted — global Intune lookup skipped for %s",
-                    object_id,
-                )
-        except Exception as exc:
-            logger.debug("Global Intune lookup error for %s: %s", object_id, exc)
-
-    # ── Pass 3: User-scoped Intune lookup ──────────────────────────────────────
-    # Covers devices where the user IS the Intune primary user.
-    # Two sub-cases:
-    #   a) Device was already found in registeredDevices → merge by name or hw_id
-    #   b) Device not in registeredDevices at all → add as Intune-only
-    try:
-        resp = _requests.get(
-            f"{_GRAPH_BASE}/users/{object_id}/managedDevices",
-            headers=headers,
-            params={"$select": intune_select, "$top": 100},
-            timeout=10,
-        )
-        if resp.ok:
-            for d in resp.json().get("value", []):
-                intune_id  = d.get("id", "")
-                hw_id      = d.get("azureADDeviceId") or ""
-                device_name = d.get("deviceName") or ""
-
-                # Already matched via global Intune lookup (Pass 2) — skip
-                if hw_id and hw_id in matched_hw_ids:
-                    continue
-
-                # Already in output dict under this Intune ID — skip
-                if intune_id in devices:
-                    continue
-
-                # Try to find the matching Entra record by hw_id first, then name
-                entra_rec = None
-                if hw_id and hw_id != _ZERO_GUID:
-                    entra_rec = entra_by_hw_id.get(hw_id)
-                if entra_rec is None and device_name:
-                    entra_rec = entra_by_name.get(device_name.lower())
-
-                raw_owner = d.get("managedDeviceOwnerType", "")
-                ownership = (
-                    "corporate" if raw_owner == "company"
-                    else "personal" if raw_owner == "personal"
-                    else None
-                )
-
-                if entra_rec:
-                    entra_obj_id = entra_rec["entra_obj_id"]
-                    if entra_obj_id in devices:
-                        continue  # already added from Pass 2
-                    physical_ids = entra_rec["physical_ids"]
-                    in_autopilot = any(p.startswith("[ZTDID]") for p in physical_ids)
-                    key = entra_obj_id
-                else:
-                    entra_obj_id = None
-                    in_autopilot = False
-                    key = intune_id  # no Entra record; key by Intune ID
-
-                devices[key] = {
-                    "device_id":        key,
-                    "intune_device_id": intune_id,
-                    "entra_device_id":  entra_obj_id,
-                    "serial_number":    d.get("serialNumber") or None,
-                    "display_name":     device_name or (entra_rec["display_name"] if entra_rec else None),
-                    "device_type":      "intune",
-                    "operating_system": d.get("operatingSystem"),
-                    "os_version":       d.get("osVersion"),
-                    "model":            d.get("model"),
-                    "manufacturer":     d.get("manufacturer"),
-                    "compliance_state": d.get("complianceState"),
-                    "management_state": d.get("managementState"),
-                    "enrolled_date_time":  d.get("enrolledDateTime"),
-                    "last_sync_date_time": d.get("lastSyncDateTime"),
-                    "is_managed":  True,
-                    "trust_type":  entra_rec["trust_type"] if entra_rec else None,
-                    "ownership":   ownership,
-                    "in_intune":   True,
-                    "in_entra":    entra_obj_id is not None,
-                    "in_autopilot": in_autopilot,
-                }
-        elif resp.status_code == 403:
-            logger.debug(
-                "DeviceManagementManagedDevices.Read.All not granted — user managedDevices skipped for %s",
-                object_id,
-            )
-    except Exception as exc:
-        logger.debug("managedDevices fetch error for %s: %s", object_id, exc)
-
-    # ── Add any remaining Entra-only devices ──────────────────────────────────
-    # Entra devices from Pass 1 that were not matched to any Intune record.
-    seen_hw_ids = matched_hw_ids | {
-        v.get("hw_id", "") for v in (
-            {k: entra_by_hw_id.get(k) for k in matched_hw_ids}.values()
-        ) if v
-    }
-    for hw_id, entra_rec in entra_by_hw_id.items():
-        if hw_id in matched_hw_ids:
-            continue  # already merged
-        entra_obj_id = entra_rec["entra_obj_id"]
-        if entra_obj_id in devices:
-            continue
-        trust = entra_rec["trust_type"]
-        devo  = entra_rec["device_ownership"]
-        if devo == "company":
-            ownership = "corporate"
-        elif devo == "personal":
-            ownership = "personal"
-        elif trust in ("AzureAd", "ServerAd"):
-            ownership = "corporate"
-        elif trust == "Workplace":
-            ownership = "personal"
-        else:
-            ownership = None
-        physical_ids = entra_rec["physical_ids"]
-        devices[entra_obj_id] = {
-            "device_id":        entra_obj_id,
-            "intune_device_id": None,
-            "entra_device_id":  entra_obj_id,
-            "serial_number":    None,
-            "display_name":     entra_rec["display_name"],
-            "device_type":      "entra",
-            "operating_system": entra_rec["operating_system"],
-            "os_version":       entra_rec["os_version"],
-            "model":            entra_rec["model"],
-            "manufacturer":     entra_rec["manufacturer"],
-            "compliance_state": None,
-            "management_state": None,
-            "enrolled_date_time":  None,
-            "last_sync_date_time": entra_rec["last_sync_date_time"],
-            "is_managed":  False,
-            "trust_type":  trust,
-            "ownership":   ownership,
-            "in_intune":   False,
-            "in_entra":    True,
-            "in_autopilot": any(p.startswith("[ZTDID]") for p in physical_ids),
-        }
-
-    # Also add Entra devices that had no hw_id (rare: couldn't build hw_id map entry)
-    # Identified only in the name map — check if they made it into devices already
-    seen_entra_obj_ids = {v.get("entra_device_id") for v in devices.values() if v.get("entra_device_id")}
-    for name_key, entra_rec in entra_by_name.items():
-        entra_obj_id = entra_rec["entra_obj_id"]
-        if entra_obj_id in seen_entra_obj_ids or entra_obj_id in devices:
-            continue
-        trust = entra_rec["trust_type"]
-        devo  = entra_rec["device_ownership"]
-        if devo == "company":
-            ownership = "corporate"
-        elif devo == "personal":
-            ownership = "personal"
-        elif trust in ("AzureAd", "ServerAd"):
-            ownership = "corporate"
-        elif trust == "Workplace":
-            ownership = "personal"
-        else:
-            ownership = None
-        physical_ids = entra_rec["physical_ids"]
-        devices[entra_obj_id] = {
-            "device_id":        entra_obj_id,
-            "intune_device_id": None,
-            "entra_device_id":  entra_obj_id,
-            "serial_number":    None,
-            "display_name":     entra_rec["display_name"],
-            "device_type":      "entra",
-            "operating_system": entra_rec["operating_system"],
-            "os_version":       entra_rec["os_version"],
-            "model":            entra_rec["model"],
-            "manufacturer":     entra_rec["manufacturer"],
-            "compliance_state": None,
-            "management_state": None,
-            "enrolled_date_time":  None,
-            "last_sync_date_time": entra_rec["last_sync_date_time"],
-            "is_managed":  False,
-            "trust_type":  trust,
-            "ownership":   ownership,
-            "in_intune":   False,
-            "in_entra":    True,
-            "in_autopilot": any(p.startswith("[ZTDID]") for p in physical_ids),
-        }
 
     return sorted(devices.values(), key=lambda d: (d.get("display_name") or "").lower())
 
