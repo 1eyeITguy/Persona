@@ -178,9 +178,15 @@ try {{
     $out = @{{ size_bytes = $null; shared_access = @() }}
 
     # Mailbox size — requires View-Only Recipients role
+    # Uses Get-EXOMailboxStatistics (REST-based, v3+ module).
+    # TotalItemSize returns a string like "8.065 GB (8,660,165,410 bytes)";
+    # extract the raw byte count from inside the parentheses.
     try {{
-        $stats = Get-MailboxStatistics -Identity '{safe_upn}' -ErrorAction Stop
-        $out.size_bytes = $stats.TotalItemSize.Value.ToBytes()
+        $stats = Get-EXOMailboxStatistics -Identity '{safe_upn}' -ErrorAction Stop
+        $sizeStr = $stats.TotalItemSize.ToString()
+        if ($sizeStr -match '\(([0-9,]+)\s*bytes\)') {{
+            $out.size_bytes = [long]($Matches[1] -replace ',', '')
+        }}
     }} catch {{
         # Role not assigned or mailbox not found — continue without size
     }}
