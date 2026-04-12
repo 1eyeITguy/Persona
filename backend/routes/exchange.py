@@ -26,7 +26,7 @@ from backend.auth.ldap import get_exchange_attrs_by_upn
 from backend.deps import require_jwt
 from backend.models.schemas import ExchangeExtendedResponse, ExchangeMailboxResponse, ProxyAddress, SharedMailboxAccess
 from backend.services.exchange_graph import get_exchange_mailbox_data
-from backend.services.exchange_ps import get_mailbox_extended, get_org_block_flag
+from backend.services.exchange_ps import get_mailbox_size, get_org_block_flag, get_shared_mailbox_access
 from backend.services.exchange_soa import ExchangeSOA, resolve_exchange_soa
 
 logger = logging.getLogger(__name__)
@@ -189,8 +189,43 @@ async def get_user_exchange_extended(
     tenant      = ps_cfg["tenant_domain"]
     cert_pw     = ps_cfg.get("cert_password")
 
-    extended = await run_in_threadpool(
-        get_mailbox_extended, app_id, cert_path, tenant, upn, cert_pw
+    size_bytes = await run_in_threadpool(
+        get_mailbox_size, app_id, cert_path, tenant, upn, cert_pw
+    )
+
+    return ExchangeExtendedResponse(
+        mailbox_size_bytes=size_bytes,
+        shared_mailbox_access=[],
+        ps_available=True,
+    )
+
+
+@router.get("/user/{upn}/shared-access", response_model=ExchangeExtendedResponse)
+async def get_user_shared_access(
+    upn: str,
+    _token: dict = Depends(require_jwt),
+) -> ExchangeExtendedResponse:
+    """
+    Shared mailbox access for a user — SendAs + FullAccess.
+    Called on demand (button click) because FullAccess requires iterating
+    all shared mailboxes in the org and can take 30-120 seconds.
+    """
+    upn = unquote(upn)
+
+    if not is_exchange_ps_configured():
+        return ExchangeExtendedResponse(ps_available=False)
+
+    ps_cfg = get_exchange_ps_config()
+    if not ps_cfg:
+        return ExchangeExtendedResponse(ps_available=False)
+
+    raw = await run_in_threadpool(
+        get_shared_mailbox_access,
+        ps_cfg["app_id"],
+        ps_cfg.get("cert_path", ""),
+        ps_cfg["tenant_domain"],
+        upn,
+        ps_cfg.get("cert_password"),
     )
 
     shared_access = [
@@ -199,11 +234,11 @@ async def get_user_exchange_extended(
             email=s["email"],
             access_type=s["access_type"],
         )
-        for s in extended.get("shared_access", [])
+        for s in raw
     ]
 
     return ExchangeExtendedResponse(
-        mailbox_size_bytes=extended.get("size_bytes"),
+        mailbox_size_bytes=None,
         shared_mailbox_access=shared_access,
         ps_available=True,
     )

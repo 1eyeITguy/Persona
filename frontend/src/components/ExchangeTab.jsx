@@ -66,10 +66,7 @@ function formatBytes(bytes) {
 // State: CLOUD
 // ---------------------------------------------------------------------------
 
-function CloudMailboxView({ data, extended, extLoading }) {
-  const sizeBytes = extended?.mailbox_size_bytes ?? null
-  const sharedAccess = extended?.shared_mailbox_access ?? []
-
+function CloudMailboxView({ data, sizeBytes, sizeLoading, shared, sharedLoading, onLoadShared }) {
   return (
     <div>
       <SectionHeading>Exchange Online</SectionHeading>
@@ -79,8 +76,8 @@ function CloudMailboxView({ data, extended, extLoading }) {
         <Field
           label="Mailbox size"
           value={
-            extLoading ? '…' :
-            sizeBytes  ? formatBytes(sizeBytes) :
+            sizeLoading  ? 'Loading...' :
+            sizeBytes    ? formatBytes(sizeBytes) :
             null
           }
         />
@@ -137,39 +134,46 @@ function CloudMailboxView({ data, extended, extLoading }) {
       )}
 
       {/* Shared mailbox access */}
-      {sharedAccess.length > 0 && (
-        <>
-          <SectionHeading>Shared Mailbox Access</SectionHeading>
-          <ul className="space-y-1">
-            {sharedAccess.map((s, i) => (
-              <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
-                <Share2 className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                <div className="flex-1">
-                  <span className="text-sm text-slate-300">{s.display_name}</span>
-                  {s.email && s.email !== s.display_name && (
-                    <span className="ml-2 font-mono text-xs text-slate-500">{s.email}</span>
-                  )}
-                </div>
-                <span className={`text-xs font-medium rounded-full border px-2 py-0.5 ${
-                  s.access_type === 'FullAccess'
-                    ? 'border-brand-primary/30 bg-brand-primary/10 text-brand-primary'
-                    : 'border-slate-500/30 bg-slate-500/10 text-slate-400'
-                }`}>
-                  {s.access_type}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </>
+      <SectionHeading>Shared Mailbox Access</SectionHeading>
+      {shared === null && !sharedLoading && (
+        <button
+          onClick={onLoadShared}
+          className="flex items-center gap-1.5 rounded-md border border-border-subtle px-3 py-1.5 text-xs text-slate-400 hover:border-brand-primary/50 hover:text-slate-200 transition-colors"
+        >
+          <Share2 className="h-3.5 w-3.5" />
+          Load shared mailbox access
+        </button>
       )}
-
-      {!extLoading && sharedAccess.length === 0 && !data.distribution_groups?.length && (
-        <p className="mt-4 text-xs text-slate-600">No distribution group membership or shared mailbox access found.</p>
-      )}
-      {extLoading && (
-        <p className="mt-4 flex items-center gap-1.5 text-xs text-slate-500">
-          <Loader2 className="h-3 w-3 animate-spin" /> Loading mailbox size and shared access…
+      {sharedLoading && (
+        <p className="flex items-center gap-1.5 text-xs text-slate-500">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Loading… this may take a minute
         </p>
+      )}
+      {shared !== null && !sharedLoading && shared.length === 0 && (
+        <p className="text-xs text-slate-600">No shared mailbox access found.</p>
+      )}
+      {shared !== null && shared.length > 0 && (
+        <ul className="space-y-1">
+          {shared.map((s, i) => (
+            <li key={i} className="flex items-center gap-2 rounded-md border border-border-subtle/40 bg-app-bg/40 px-3 py-1.5">
+              <Share2 className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+              <div className="flex-1">
+                <span className="text-sm text-slate-300">{s.display_name}</span>
+                {s.email && s.email !== s.display_name && (
+                  <span className="ml-2 font-mono text-xs text-slate-500">{s.email}</span>
+                )}
+              </div>
+              <span className={`text-xs font-medium rounded-full border px-2 py-0.5 ${
+                s.access_type === 'FullAccess'
+                  ? 'border-brand-primary/30 bg-brand-primary/10 text-brand-primary'
+                  : 'border-slate-500/30 bg-slate-500/10 text-slate-400'
+              }`}>
+                {s.access_type}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )
@@ -180,16 +184,19 @@ function CloudMailboxView({ data, extended, extLoading }) {
 // ---------------------------------------------------------------------------
 
 export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
-  const [mailbox, setMailbox]     = useState(null)
-  const [loading, setLoading]     = useState(false)
-  const [error, setError]         = useState(null)
-  const [extended, setExtended]   = useState(null)   // EXO PS data: size + shared access
-  const [extLoading, setExtLoading] = useState(false)
+  const [mailbox, setMailbox]         = useState(null)
+  const [loading, setLoading]         = useState(false)
+  const [error, setError]             = useState(null)
+  const [sizeBytes, setSizeBytes]     = useState(null)
+  const [sizeLoading, setSizeLoading] = useState(false)
+  const [shared, setShared]           = useState(null)    // null = not loaded yet
+  const [sharedLoading, setSharedLoading] = useState(false)
 
   useEffect(() => {
     if (!upn) return
     setMailbox(null)
-    setExtended(null)
+    setSizeBytes(null)
+    setShared(null)
     setError(null)
     setLoading(true)
 
@@ -202,19 +209,31 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
         setMailbox(res.data)
         onSoaResolved?.(res.data.soa)
 
-        // Only fetch extended (EXO PS) data when SOA is cloud
+        // Auto-load size (fast — single Get-EXOMailboxStatistics call)
         if (res.data.soa === 'cloud') {
-          setExtLoading(true)
+          setSizeLoading(true)
           axios
             .get(`/api/v1/exchange/user/${encodeURIComponent(upn)}/extended`, { headers })
-            .then(ext => setExtended(ext.data))
-            .catch(() => {/* extended data is optional — fail silently */})
-            .finally(() => setExtLoading(false))
+            .then(ext => setSizeBytes(ext.data.mailbox_size_bytes ?? null))
+            .catch(() => {})
+            .finally(() => setSizeLoading(false))
         }
       })
       .catch(() => setError(true))
       .finally(() => setLoading(false))
   }, [upn]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function loadSharedAccess() {
+    const token = getToken()
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    setSharedLoading(true)
+    setShared(null)
+    axios
+      .get(`/api/v1/exchange/user/${encodeURIComponent(upn)}/shared-access`, { headers })
+      .then(res => setShared(res.data.shared_mailbox_access ?? []))
+      .catch(() => setShared([]))
+      .finally(() => setSharedLoading(false))
+  }
 
   if (loading) {
     return (
@@ -238,7 +257,16 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
 
   // ── CLOUD ──────────────────────────────────────────────────────────────────
   if (mailbox.soa === 'cloud') {
-    return <CloudMailboxView data={mailbox} extended={extended} extLoading={extLoading} />
+    return (
+      <CloudMailboxView
+        data={mailbox}
+        sizeBytes={sizeBytes}
+        sizeLoading={sizeLoading}
+        shared={shared}
+        sharedLoading={sharedLoading}
+        onLoadShared={loadSharedAccess}
+      />
+    )
   }
 
   // ── STALE_AD_ATTRS ─────────────────────────────────────────────────────────
