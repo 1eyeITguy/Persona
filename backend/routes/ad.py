@@ -224,7 +224,7 @@ async def get_user_merged(
     if user.is_synced:
         from backend.app_config import get_entra_settings  # type: ignore
         from backend.auth.msal import get_entra_user, get_entra_user_photo  # type: ignore
-        from backend.models.schemas import EntraGroupRef  # type: ignore
+        from backend.models.schemas import AuthMethod, EntraGroupRef, UserLicense  # type: ignore
 
         entra_cfg = get_entra_settings()
         if entra_cfg:
@@ -252,8 +252,12 @@ async def get_user_merged(
                         "entra_last_sign_in": entra_data.get("last_sign_in"),
                         "entra_account_enabled": entra_data.get("account_enabled"),
                         "entra_default_mfa_method": entra_data.get("default_mfa_method"),
-                        "entra_mfa_methods": entra_data.get("mfa_methods", []),
-                        "entra_licenses": entra_data.get("licenses", []),
+                        "entra_mfa_methods": [
+                            AuthMethod(**m) for m in entra_data.get("mfa_methods", [])
+                        ],
+                        "entra_licenses": [
+                            UserLicense(**l) for l in entra_data.get("licenses", [])
+                        ],
                         "entra_cloud_groups": [
                             EntraGroupRef(**g) for g in entra_data.get("groups", [])
                         ],
