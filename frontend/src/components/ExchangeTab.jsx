@@ -72,7 +72,7 @@ const INNER_TABS = [
   { id: 'shared', label: 'Shared Access' },
 ]
 
-function CloudMailboxView({ data, sizeBytes, sizeLoading, shared, sharedLoading, onLoadShared }) {
+function CloudMailboxView({ data, sizeBytes, sizeLoading, shared, sharedLoading, sharedError, onLoadShared }) {
   const [innerTab, setInnerTab] = useState('email')
 
   function handleTab(id) {
@@ -180,8 +180,23 @@ function CloudMailboxView({ data, sizeBytes, sizeLoading, shared, sharedLoading,
           sharedLoading ? (
             <p className="flex items-center gap-1.5 text-xs text-slate-500">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Loading… this may take a minute
+              Loading… this may take a minute with large orgs
             </p>
+          ) : sharedError ? (
+            <div className="rounded-md border border-danger/30 bg-danger/5 px-3 py-3">
+              <p className="text-xs font-medium text-danger">
+                {sharedError === 'timeout'      && 'Request timed out — the org may have too many shared mailboxes.'}
+                {sharedError === 'ps_unavailable' && 'Exchange PowerShell is not configured or unavailable.'}
+                {sharedError === 'auth'         && 'Authentication error — try refreshing your session.'}
+                {sharedError === 'unknown'      && 'Failed to load shared mailbox access. Check backend logs for details.'}
+              </p>
+              <button
+                onClick={loadSharedAccess}
+                className="mt-2 text-xs text-brand-primary hover:underline"
+              >
+                Retry
+              </button>
+            </div>
           ) : shared === null ? (
             // Shouldn't be visible — load triggers on tab click — but just in case
             <p className="text-xs text-slate-600">Initializing…</p>
@@ -228,12 +243,14 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
   const [sizeLoading, setSizeLoading] = useState(false)
   const [shared, setShared]           = useState(null)    // null = not loaded yet
   const [sharedLoading, setSharedLoading] = useState(false)
+  const [sharedError, setSharedError] = useState(false)
 
   useEffect(() => {
     if (!upn) return
     setMailbox(null)
     setSizeBytes(null)
     setShared(null)
+    setSharedError(false)
     setError(null)
     setLoading(true)
 
@@ -265,10 +282,26 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
     const headers = token ? { Authorization: `Bearer ${token}` } : {}
     setSharedLoading(true)
     setShared(null)
+    setSharedError(false)
     axios
-      .get(`/api/v1/exchange/user/${encodeURIComponent(upn)}/shared-access`, { headers })
-      .then(res => setShared(res.data.shared_mailbox_access ?? []))
-      .catch(() => setShared([]))
+      .get(`/api/v1/exchange/user/${encodeURIComponent(upn)}/shared-access`, { headers, timeout: 300000 })
+      .then(res => {
+        if (res.data.ps_available === false) {
+          setSharedError('ps_unavailable')
+        } else {
+          setShared(res.data.shared_mailbox_access ?? [])
+        }
+      })
+      .catch(err => {
+        const code = err.response?.status
+        if (err.code === 'ECONNABORTED' || !err.response) {
+          setSharedError('timeout')
+        } else if (code === 401 || code === 403) {
+          setSharedError('auth')
+        } else {
+          setSharedError('unknown')
+        }
+      })
       .finally(() => setSharedLoading(false))
   }
 
@@ -301,6 +334,7 @@ export default function ExchangeTab({ upn, getToken, onSoaResolved }) {
         sizeLoading={sizeLoading}
         shared={shared}
         sharedLoading={sharedLoading}
+        sharedError={sharedError}
         onLoadShared={loadSharedAccess}
       />
     )

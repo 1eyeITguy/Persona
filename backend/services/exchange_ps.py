@@ -240,7 +240,7 @@ try {{
     {_disconnect_snippet()}
 }}
 """
-    output, _ = _run_ps(script, timeout=180)
+    output, _ = _run_ps(script, timeout=300)
     if not output:
         return []
     try:
