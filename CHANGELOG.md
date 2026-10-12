@@ -42,6 +42,7 @@ Versioning: [Semantic Versioning](https://semver.org/)
 ### Changed
 - **Entra app registration permissions updated** — three new application permissions required: `MailboxSettings.Read`, `Mail.Read`, `Exchange.ManageAsApp`; permissions list in Setup Wizard and Settings updated with descriptions
 - Setup Wizard step count: 5 → 6 (Exchange PS step inserted before Confirm)
+- **Security: `axios` upgraded 1.14.0 → 1.20.0** — resolves Defender-reported CVEs (including CVE-2025-62718 and related NO_PROXY/SSRF and prototype-pollution advisories); `react-router-dom` updated to 6.30.6 via `npm audit fix`
 
 ---
 
